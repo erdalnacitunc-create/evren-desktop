@@ -1,0 +1,26 @@
+node_modules/
+out/
+dist/
+.vite/
+*.log
+.DS_Store
+
+# Secrets / local runtime data
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+credentials.bin
+github-token.bin
+github-app-key.bin
+headless-token.bin
+settings.json
+sessions.json
+subagent-tasks.json
+scheduled-tasks.json
+
+# Installer is committed intentionally (via Git LFS); unpacked app is not.
+release/win-unpacked/
+release/builder-debug.yml

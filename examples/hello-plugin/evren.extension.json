@@ -1,0 +1,10 @@
+{
+  "name": "Hello Plugin",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "permissions": {
+    "network": [],
+    "filesystem": false,
+    "shell": false
+  }
+}

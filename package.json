@@ -1,6 +1,6 @@
 {
   "name": "evren-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "EVREN LLM API icin Windows masaustu istemcisi",
   "main": "./out/main/index.js",
   "author": "evren-desktop",

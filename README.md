@@ -174,7 +174,7 @@ npm run build:win  # Windows NSIS kurulum paketi
 
 Windows x64 kurulum dosyası:
 
-`release/EVREN-Desktop-Setup-0.1.0-x64.exe`
+`release/EVREN-Desktop-Setup-0.1.1-x64.exe`
 
 - Kurulum kullanıcı bazlıdır; yönetici izni gerekmez.
 - Beta, ayrı `%APPDATA%\EVREN Desktop Beta` profili kullanır.

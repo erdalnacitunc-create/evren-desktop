@@ -182,7 +182,8 @@ function setupTray(): void {
   tray.on('double-click', showMainWindow)
 }
 
-async function createWindow(): Promise<void> {  const state = await loadWindowState()
+async function createWindow(): Promise<void> {
+  const state = await loadWindowState()
   const isMac = process.platform === 'darwin'
   const iconPath = appIconPath()
 

@@ -91,3 +91,49 @@ test izole geçici veri dizini kullanır, kullanıcı verisine dokunmaz.
 - **asar bütünlük doğrulaması** ve güncelleme imzası.
 - Electron sürüm takibi (electron-audit EA062 / Dependabot).
 - `run_command` için isteğe bağlı komut allowlist'i (şu an Onaylı mod önerilir).
+
+## Ek denetim — 21 Ekim 2026 (beta)
+
+Kapsam: temiz beta kaynak ağacı (`evren-desktop-beta`), Git geçmişi, bağımlılıklar
+ve gerçek Electron E2E.
+
+### Araçlar ve sonuçlar
+
+| Araç | Sonuç |
+|---|---|
+| **Semgrep 1.182.0** (`p/typescript`, `p/security-audit`, `p/secrets`) | **0 bulgu** (Chat.tsx için 2 kural zaman aşımı) |
+| **Gitleaks 8.30.1** | **0 sızıntı** (1 commit, ~1.43 MB) |
+| **electron-audit 0.1.11** | 1 high heuristic (`safeOpen`), 1 low (imzalama) |
+| **Electronegativity 1.10.3** | 5 bulgu; tamamı manuel incelemede yanlış pozitif |
+| **npm audit --omit=dev** | **0 zafiyet** |
+| **npm audit (tümü)** | 8 moderate, yalnızca dev `electron-builder` zinciri |
+| **license-checker** | MIT/ISC/BSD/Apache/BlueOak; copyleft bağımlılık yok |
+| **depcheck** | Yalnızca `@shared/*` alias yanlış pozitifleri |
+| **knip** | Runtime entrypoint’ler ve bilinçli public tipler dışında ölü kod yok |
+| **E2E (`npm run test:e2e`)** | **Geçti** (sandbox, contextIsolation, preload, pano) |
+| **Temiz paket testi** | `win-unpacked` ayrı `%APPDATA%\EVREN Desktop Beta` ile onboarding açtı |
+
+### Yapılan düzeltmeler
+
+- **Tarball symlink/hardlink koruması:** `src/main/extensions/github.ts`
+  içindeki çıkarma filtresi artık `SymbolicLink`, `Link` ve `linkpath` girdilerini
+  reddediyor. Path traversal (`..`, absolute path) koruması korunuyor.
+- Kullanılmayan `safeJoin` ve `setSubagentTaskStatus` kaldırıldı.
+- `src/main/index.ts` biçimlendirmesi düzeltildi.
+- Sürüm `0.1.1`e yükseltildi.
+
+### Manuel doğrulanan yanlış pozitifler
+
+- `safeOpen.ts`: `shell.openExternal` çağrısından önce yalnızca `http:`/`https:`
+  protokolleri kabul ediliyor.
+- Electronegativity: `BrowserWindow` için `sandbox: true`, `contextIsolation: true`,
+  `nodeIntegration: false`, `webviewTag: false`; navigasyon ve yeni pencere
+  engelleri mevcut.
+- CSP üretimde `script-src 'self'`.
+
+### Kalan bilinçli riskler
+
+- Windows installer **imzasız**; SmartScreen uyarısı gösterebilir.
+- `electron-builder` dev zincirindeki moderate CVE'ler üretim paketine girmiyor.
+- `run_command` ve terminal, kullanıcı onayı/eylemiyle keyfi yerel komut çalıştırır;
+  tasarım gereği.

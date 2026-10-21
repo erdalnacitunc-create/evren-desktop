@@ -1,5 +1,4 @@
 import { promises as fs } from 'fs'
-import { join, sep } from 'path'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import * as tar from 'tar'
@@ -161,10 +160,14 @@ export async function extractTarball(buffer: Buffer, destination: string): Promi
   const extractor = tar.x({
     cwd: destination,
     strip: 1,
-    filter: (entryPath: string) => {
+    filter: (entryPath: string, entry: unknown) => {
+      const meta = entry as { type?: string; linkpath?: string }
       const normalized = entryPath.replace(/\\/g, '/')
       if (normalized.startsWith('/')) return false
       if (normalized.split('/').includes('..')) return false
+      // Symlink/hardlink girdileri hedef dizin dışına işaret edebilir.
+      if (meta.type === 'SymbolicLink' || meta.type === 'Link') return false
+      if (meta.linkpath) return false
       return true
     }
   })
@@ -183,13 +186,4 @@ export async function downloadAndExtract(
 
 export function repoCacheKey(owner: string, repo: string, commit: string): string {
   return `${owner}/${repo}@${commit}`
-}
-
-export function safeJoin(root: string, relative: string): string {
-  const target = join(root, relative)
-  const normalizedRoot = root.endsWith('\\') || root.endsWith('/') ? root : root + sep
-  if (!target.startsWith(normalizedRoot) && target !== root) {
-    throw new Error('Geçersiz dosya yolu.')
-  }
-  return target
 }

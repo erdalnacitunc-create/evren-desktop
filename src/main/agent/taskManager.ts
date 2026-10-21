@@ -192,13 +192,6 @@ export function cancelSubagentTask(id: string): boolean {
   return true
 }
 
-export function setSubagentTaskStatus(
-  id: string,
-  status: SubagentTaskStatus
-): SubagentTaskInfo | null {
-  return updateSubagentTask(id, { status })
-}
-
 export function retrySubagentTask(id: string): SubagentTaskInfo | null {
   const record = tasks.get(id)
   if (!record || !resumeHandler || record.info.status === 'running') {

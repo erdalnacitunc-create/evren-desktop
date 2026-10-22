@@ -194,6 +194,31 @@ input {
   place-items: center;
   padding: 24px;
   overflow: auto;
+  position: relative;
+}
+
+.onboarding-drag-region {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 132px;
+  height: 38px;
+  -webkit-app-region: drag;
+  z-index: 2;
+}
+
+.onboarding-window-controls {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 3;
+  margin: 0;
+  height: 38px;
+  align-items: center;
+}
+
+.onboarding-window-controls .window-control {
+  height: 38px;
 }
 
 .onboarding-card {
@@ -5969,7 +5994,79 @@ kbd {
   color: #1e3a8a;
 }
 
-/* ---------- terminal ---------- */
+/* ---------- güncellemeler ---------- */
+.update-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.update-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.update-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.update-row strong {
+  font-size: 12px;
+}
+
+.update-row .muted {
+  font-size: 10px;
+}
+
+.update-box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 10px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+}
+
+.update-box strong {
+  font-size: 11.5px;
+}
+
+.update-notes {
+  width: 100%;
+  max-height: 140px;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.update-progress {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.update-progress > div {
+  height: 100%;
+  background: #3b82f6;
+  transition: width 0.2s ease;
+}
+
+.update-hint {
+  margin: 0;
+  font-size: 9.5px;
+  line-height: 1.5;
+}
 .code-copy.code-run {
   right: 42px;
   font-size: 10px;

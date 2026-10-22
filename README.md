@@ -170,18 +170,29 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-## Beta indirme
+## 0.2.0 Beta
 
-Windows x64 kurulum dosyası:
+### Windows x64
+- Kurulum: `release/EVREN-Desktop-Setup-0.2.0-x64.exe`
+- Kullanıcı bazlı NSIS kurulumu
+- Ayrı beta profili: `%APPDATA%\EVREN Desktop Beta`
+- API anahtarı/token/session içermez
 
-`release/EVREN-Desktop-Setup-0.1.1-x64.exe`
+### Pardus / Debian x64
+- `.deb`: GitHub release asset
+- AppImage: GitHub release asset
+- Ayrıntılar: `docs/PARDUS.md`
 
-- Kurulum kullanıcı bazlıdır; yönetici izni gerekmez.
-- Beta, ayrı `%APPDATA%\EVREN Desktop Beta` profili kullanır.
-- API anahtarı, oturum ve GitHub token'ları paket içinde **gelmez**.
-- Windows kod imzalama **SignPath Foundation** üzerinden yürütülmektedir; bu
-  beta geçiş sürecinde imzasız olabilir.
-- Paketleme: `docs/PACKAGING.md`.
-- Gizlilik: `PRIVACY.md`.
-- Pardus/Debian: `docs/PARDUS.md`.
+### Bu sürümde yeni
+- Onboarding penceresinde küçült / büyüt / kapat kontrolleri
+- `electron-updater` tabanlı otomatik güncelleme paneli
+- Pardus `.deb` + AppImage paketleme
+- Linux CI (GitHub Actions / Ubuntu)
+- Önceki sürümlerdeki MCP, terminal, ACP, GitHub App ve hafıza özellikleri
 
+Windows kod imzalama SignPath Foundation başvurusu sürecindedir; bu beta
+installer imzasız olabilir. İmzalı sürüm ayrı bir release olarak yayınlanacaktır.
+
+- Gizlilik: `PRIVACY.md`
+- Güncelleme: `docs/UPDATE.md`
+- SignPath: `docs/SIGNPATH.md`

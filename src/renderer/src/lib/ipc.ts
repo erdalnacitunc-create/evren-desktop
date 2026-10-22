@@ -27,6 +27,7 @@ import type {
   SlashCommand,
   StoredMessage,
   TerminalStatus,
+  UpdateStatus,
   WorkspaceChange,
   WorkspaceEntry,
   WorkspaceFileContent,
@@ -156,6 +157,14 @@ export const api = {
       callback: (payload: { code: number | null; signal: string | null }) => void
     ): (() => void) =>
       window.evren.terminal.onExit(callback as (payload: unknown) => void)
+  },
+  updater: {
+    status: (): Promise<Result<UpdateStatus>> => window.evren.updater.status(),
+    check: (): Promise<Result<UpdateStatus>> => window.evren.updater.check(),
+    download: (): Promise<Result<UpdateStatus>> => window.evren.updater.download(),
+    install: (): Promise<Result<true>> => window.evren.updater.install(),
+    onStatus: (callback: (status: UpdateStatus) => void): (() => void) =>
+      window.evren.updater.onStatus(callback as (status: unknown) => void)
   },
   sessions: {
     list: (): Promise<Result<SessionSummary[]>> => window.evren.sessions.list(),

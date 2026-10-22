@@ -1,0 +1,59 @@
+name: Linux build (Pardus)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    name: Pardus / Debian x64
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install fpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev rubygems build-essential
+          sudo gem install --no-document fpm
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build Linux packages
+        run: npm run build:linux
+
+      - name: Checksums
+        run: |
+          cd release
+          sha256sum *.deb *.AppImage > SHA256SUMS.txt || true
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: evren-desktop-deb
+          path: |
+            release/*.deb
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: evren-desktop-appimage
+          path: |
+            release/*.AppImage
+            release/SHA256SUMS.txt
+          if-no-files-found: error

@@ -151,6 +151,26 @@ export interface TerminalStatus {
   error?: string
 }
 
+export type UpdatePhase =
+  | 'disabled'
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error'
+
+export interface UpdateStatus {
+  phase: UpdatePhase
+  currentVersion: string
+  version?: string
+  releaseNotes?: string
+  percent?: number
+  error?: string
+  canCheck: boolean
+}
+
 export interface AppSettings extends ChatDefaults {
   baseUrl: string
   theme?: ThemeMode

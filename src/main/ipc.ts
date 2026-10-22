@@ -114,6 +114,12 @@ import {
 } from './memory/store'
 import { getSettings, setBaseUrl, updateSettings } from './settings'
 import {
+  checkForUpdates,
+  downloadUpdate,
+  installUpdate,
+  updaterStatus
+} from './updater'
+import {
   applyHeadlessSettings,
   headlessStatus,
   restartHeadlessServer
@@ -192,6 +198,7 @@ import type {
   StoredMessage,
   SubagentTaskInfo,
   TerminalStatus,
+  UpdateStatus,
   WorkspaceChange,
   WorkspaceCheckpoint,
   WorkspaceEntry,
@@ -521,6 +528,39 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('terminal:status', async (): Promise<Result<TerminalStatus>> => {
     try {
       return { ok: true, data: terminalStatus() }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  ipcMain.handle('update:status', async (): Promise<Result<UpdateStatus>> => {
+    try {
+      return { ok: true, data: updaterStatus() }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  ipcMain.handle('update:check', async (): Promise<Result<UpdateStatus>> => {
+    try {
+      return { ok: true, data: await checkForUpdates() }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  ipcMain.handle('update:download', async (): Promise<Result<UpdateStatus>> => {
+    try {
+      return { ok: true, data: await downloadUpdate() }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  ipcMain.handle('update:install', async (): Promise<Result<true>> => {
+    try {
+      installUpdate()
+      return { ok: true, data: true }
     } catch (error) {
       return fail(error)
     }

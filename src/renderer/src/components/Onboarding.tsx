@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../lib/ipc'
 import { EvrenLogo } from './EvrenLogo'
+import { WindowControls } from './WindowControls'
 
 interface Props {
   encryptionAvailable: boolean
@@ -41,6 +42,12 @@ export function Onboarding({ encryptionAvailable, notice, onComplete }: Props): 
 
   return (
     <div className="onboarding">
+      <div
+        className="onboarding-drag-region"
+        onDoubleClick={() => void api.appWindow.toggleMaximize()}
+        aria-hidden="true"
+      />
+      <WindowControls className="onboarding-window-controls" />
       <div className="onboarding-card">
         <div className="brand brand-lg">
           <EvrenLogo size={48} className="evren-logo" />

@@ -1,11 +1,12 @@
 {
   "name": "evren-desktop",
-  "version": "0.1.1",
-  "description": "EVREN LLM API icin Windows masaustu istemcisi",
+  "version": "0.2.0",
+  "description": "EVREN LLM API için açık kaynak Windows ve Linux masaüstü istemcisi",
   "main": "./out/main/index.js",
   "author": "evren-desktop",
   "license": "MIT",
   "private": true,
+  "desktopName": "evren-desktop.desktop",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -18,7 +19,8 @@
     "audit:deps": "npm audit --omit=dev",
     "audit:licenses": "npx -y license-checker --summary --production",
     "test:e2e": "node scripts/e2e-smoke.cjs",
-    "build:win": "electron-vite build && electron-builder --win"
+    "build:win": "electron-vite build && electron-builder --win",
+    "build:linux": "electron-vite build && electron-builder --linux"
   },
   "build": {
     "appId": "com.evren.desktop",
@@ -39,6 +41,13 @@
       }
     ],
     "asar": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "erdalnacitunc-create",
+        "repo": "evren-desktop"
+      }
+    ],
     "win": {
       "target": [
         {
@@ -59,6 +68,29 @@
       "createStartMenuShortcut": true,
       "shortcutName": "EVREN Desktop",
       "artifactName": "EVREN-Desktop-Setup-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development",
+      "icon": "build/icon.png",
+      "maintainer": "EVREN Desktop contributors",
+      "synopsis": "EVREN LLM API desktop client",
+      "description": "EVREN Desktop: chat, AI agents, MCP, terminal and ACP client for the EVREN LLM API. Pardus/Debian uyumlu.",
+      "executableName": "evren-desktop",
+      "syncDesktopName": true
     }
   },
   "devDependencies": {
@@ -76,6 +108,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "electron-updater": "^6.8.9",
     "mermaid": "^12.2.0",
     "playwright-core": "^1.64.1",
     "react-markdown": "^10.1.0",

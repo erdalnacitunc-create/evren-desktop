@@ -20,6 +20,10 @@ import { startAcp } from './acp'
 import { applyHeadlessSettings, stopHeadlessServer } from './headless'
 import { startScheduler, stopScheduler } from './scheduler'
 import { stopTerminal } from './terminal'
+import {
+  initUpdater,
+  stopUpdater
+} from './updater'
 import { openExternalSafe } from './safeOpen'
 import { initSubagentTaskStore, resumeInterruptedSubagentTasks } from './agent/taskManager'
 import { getSettings } from './settings'
@@ -355,6 +359,7 @@ app.whenReady().then(async () => {
   await startScheduler()
   await applyHeadlessSettings()
   await createWindow()
+  initUpdater()
   setupTray()
 
   app.on('activate', () => {
@@ -370,6 +375,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   stopScheduler()
   stopTerminal()
+  stopUpdater()
   void stopHeadlessServer()
   tray?.destroy()
   tray = null

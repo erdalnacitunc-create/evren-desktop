@@ -7,6 +7,7 @@ import { HeadlessPanel } from './HeadlessPanel'
 import { McpBrowser } from './McpBrowser'
 import { MemoryPanel } from './MemoryPanel'
 import { ScheduledTasksPanel } from './ScheduledTasksPanel'
+import { UpdatePanel } from './UpdatePanel'
 
 interface Props {
   settings: AppSettings
@@ -271,6 +272,11 @@ export function SettingsModal({
                 Doğrula ve kaydet
               </button>
             </div>
+          </section>
+
+          <section className="settings-section">
+            <h3>Güncellemeler</h3>
+            <UpdatePanel />
           </section>
 
           <section className="settings-section">

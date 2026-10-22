@@ -102,6 +102,17 @@ export const api = {
       return () => ipcRenderer.removeListener('terminal:exit', listener)
     }
   },
+  updater: {
+    status: () => ipcRenderer.invoke('update:status'),
+    check: () => ipcRenderer.invoke('update:check'),
+    download: () => ipcRenderer.invoke('update:download'),
+    install: () => ipcRenderer.invoke('update:install'),
+    onStatus: (callback: (status: unknown) => void) => {
+      const listener = (_event: unknown, status: unknown): void => callback(status)
+      ipcRenderer.on('update:status', listener)
+      return () => ipcRenderer.removeListener('update:status', listener)
+    }
+  },
   sessions: {
     list: () => ipcRenderer.invoke('sessions:list'),
     search: (query: string) => ipcRenderer.invoke('sessions:search', query),

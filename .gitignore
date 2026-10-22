@@ -23,4 +23,5 @@ scheduled-tasks.json
 
 # Installer is committed intentionally (via Git LFS); unpacked app is not.
 release/win-unpacked/
+release/linux-unpacked/
 release/builder-debug.yml

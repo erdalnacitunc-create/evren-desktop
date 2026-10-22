@@ -179,5 +179,9 @@ Windows x64 kurulum dosyası:
 - Kurulum kullanıcı bazlıdır; yönetici izni gerekmez.
 - Beta, ayrı `%APPDATA%\EVREN Desktop Beta` profili kullanır.
 - API anahtarı, oturum ve GitHub token'ları paket içinde **gelmez**.
-- Kod imzalama sertifikası olmadığı için Windows SmartScreen uyarısı gösterebilir.
+- Windows kod imzalama **SignPath Foundation** üzerinden yürütülmektedir; bu
+  beta geçiş sürecinde imzasız olabilir.
 - Paketleme: `docs/PACKAGING.md`.
+- Gizlilik: `PRIVACY.md`.
+- Pardus/Debian: `docs/PARDUS.md`.
+

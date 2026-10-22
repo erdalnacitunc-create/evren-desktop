@@ -21,7 +21,10 @@ private key HSM'de tutulur ve GitHub Actions üzerinden imzalama yapılır.
    - İletişim e-postası
    - Build sistemi: **GitHub Actions**
 3. Başvuruyu gönder.
-4. Onay e-postasını bekle. Onayda SignPath organizasyon/proje erişimi verilir.
+4. Onay e-postasını bekle. OSS başvuruları için iletişim adresi
+   **oss-support@signpath.org**; genel destek adresi `support@signpath.io`.
+   SignPath organizasyonu/trial açmak tek başına onay anlamına gelmez.
+5. Repoda `CODE_SIGNING_POLICY.md` ve `CODE_OF_CONDUCT.md` güncel tutulmalı.
 
 ## 3. SignPath proje ayarları
 

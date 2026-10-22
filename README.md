@@ -9,6 +9,22 @@ anahtarini ekleyerek erisebildigi modelleri kullanir.
 - **Plan:** `docs/PLAN.md`
 - **API notlari:** `docs/API-NOTES.md`
 - **Guvenlik denetimi:** `docs/AUDIT.md` (`npm run audit:security`, `npm run test:e2e`)
+- **Code signing policy:** [`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md)
+- **Code of conduct:** [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+
+## Code signing policy
+
+EVREN Desktop is applying to [SignPath Foundation](https://signpath.org) for
+free code signing. Upon approval:
+
+> Free code signing provided by [SignPath.io](https://about.signpath.io),
+> certificate by [SignPath Foundation](https://signpath.org).
+
+Only Windows artifacts built by GitHub Actions from this repository are
+submitted for signing. The private key is held by SignPath in an HSM; this
+project does not store a code-signing private key. See
+[`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md) for the full policy, team
+roles, and verification instructions.
 
 ## Gelistirme
 
@@ -174,6 +190,7 @@ npm run build:win  # Windows NSIS kurulum paketi
 
 ### Windows x64
 - Kurulum: `release/EVREN-Desktop-Setup-0.2.0-x64.exe`
+- Portable: `release/EVREN-Desktop-0.2.0-portable-x64.zip`
 - Kullanıcı bazlı NSIS kurulumu
 - Ayrı beta profili: `%APPDATA%\EVREN Desktop Beta`
 - API anahtarı/token/session içermez

@@ -19,8 +19,8 @@
     "audit:deps": "npm audit --omit=dev",
     "audit:licenses": "npx -y license-checker --summary --production",
     "test:e2e": "node scripts/e2e-smoke.cjs",
-    "build:win": "electron-vite build && electron-builder --win",
-    "build:linux": "electron-vite build && electron-builder --linux"
+    "build:win": "electron-vite build && electron-builder --win --publish never",
+    "build:linux": "electron-vite build && electron-builder --linux --publish never"
   },
   "build": {
     "appId": "com.evren.desktop",

@@ -1,0 +1,104 @@
+name: Windows test signing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  sign-windows-installer:
+    name: Build and test-sign Windows x64 installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installer
+        run: npm run build:win
+
+      - name: Locate unsigned installer
+        id: installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release -Filter 'EVREN-Desktop-Setup-*-x64.exe' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $exe) { throw 'Unsigned installer not found' }
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+          Get-Item $exe.FullName | Select-Object Name, Length
+
+      - name: Upload unsigned installer
+        id: upload-unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: evren-desktop-unsigned-installer
+          path: ${{ steps.installer.outputs.path }}
+          archive: false
+          if-no-files-found: error
+
+      - name: Submit SignPath signing request
+        id: sign
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: 1c01d4c4-0b07-4fce-bc03-eaf4f31c9145
+          project-slug: evren-desktop
+          signing-policy-slug: test-signing
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 900
+          output-artifact-directory: signed
+          skip-decompress: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify signature
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem signed -Recurse -Filter '*.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'Signed installer not found' }
+
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+
+          "Signed file: $($exe.Name)"
+          "SHA256: $hash"
+          "Signature status: $($sig.Status)"
+          "Signer subject: $($sig.SignerCertificate.Subject)"
+
+          if (-not $sig.SignerCertificate) {
+            throw 'SignPath returned a file without a signer certificate'
+          }
+
+          $summary = @(
+            '## SignPath test signing result',
+            '',
+            "- File: ``$($exe.Name)``",
+            "- SHA256: ``$hash``",
+            "- Signature status: ``$($sig.Status)``",
+            "- Signer subject: ``$($sig.SignerCertificate.Subject)``",
+            '',
+            '> This is a self-signed test certificate. `UnknownError` / `UntrustedRoot` is expected.',
+            '> Do not publish this artifact as a trusted release.'
+          )
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload signed installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: evren-desktop-test-signed-installer
+          path: signed
+          if-no-files-found: error

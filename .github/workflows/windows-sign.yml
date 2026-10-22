@@ -50,20 +50,65 @@ jobs:
           archive: false
           if-no-files-found: error
 
-      - name: Submit SignPath signing request
+      - name: Submit SignPath signing request (REST API)
         id: sign
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: 1c01d4c4-0b07-4fce-bc03-eaf4f31c9145
-          project-slug: evren-desktop
-          signing-policy-slug: test-signing
-          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 900
-          output-artifact-directory: signed
-          skip-decompress: true
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+
+          $organizationId = '1c01d4c4-0b07-4fce-bc03-eaf4f31c9145'
+          $baseUrl = "https://app.signpath.io/Api/v1/$organizationId"
+          $headers = @{ Authorization = "Bearer $env:SIGNPATH_API_TOKEN" }
+          $installerPath = '${{ steps.installer.outputs.path }}'
+
+          $form = @{
+            projectSlug = 'evren-desktop'
+            signingPolicySlug = 'test-signing'
+            artifact = Get-Item $installerPath
+            description = "GitHub Actions $env:GITHUB_RUN_ID / $env:GITHUB_SHA"
+          }
+
+          $response = Invoke-WebRequest `
+            -Uri "$baseUrl/SigningRequests/SubmitWithArtifact" `
+            -Method Post `
+            -Headers $headers `
+            -Form $form
+
+          $location = [string]$response.Headers.Location
+          if (-not $location) {
+            $payload = $response.Content | ConvertFrom-Json
+            $location = "$baseUrl/SigningRequests/$($payload.signingRequestId)"
+          }
+          if (-not $location) { throw 'SignPath did not return a signing request location' }
+
+          $signingRequestId = ($location.TrimEnd('/') -split '/')[-1]
+          "Signing request: $signingRequestId"
+          "Location: $location"
+
+          $deadline = (Get-Date).AddMinutes(15)
+          do {
+            Start-Sleep -Seconds 5
+            $status = Invoke-RestMethod -Uri "$baseUrl/SigningRequests/$signingRequestId" -Headers $headers
+            "Status: $($status.status) / $($status.workflowStatus)"
+            if ((Get-Date) -gt $deadline) { throw 'Signing request timed out' }
+          } while (-not $status.isFinalStatus)
+
+          if ($status.status -ne 'Completed') {
+            throw "SignPath signing failed: $($status.status) / $($status.workflowStatus)"
+          }
+
+          New-Item -ItemType Directory -Force -Path signed | Out-Null
+          $signedName = Split-Path $installerPath -Leaf
+          Invoke-WebRequest `
+            -Uri "$baseUrl/SigningRequests/$signingRequestId/SignedArtifact" `
+            -Headers $headers `
+            -OutFile "signed/$signedName"
+
+          "signing-request-id=$signingRequestId" >> $env:GITHUB_OUTPUT
+          "signed-path=signed/$signedName" >> $env:GITHUB_OUTPUT
 
       - name: Verify signature
         shell: pwsh

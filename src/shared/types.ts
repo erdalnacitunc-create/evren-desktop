@@ -339,12 +339,31 @@ export interface ChatUsage {
   total_tokens?: number
 }
 
+export interface AgentQuestionOption {
+  label: string
+  description?: string
+}
+
+export interface AgentQuestion {
+  id: string
+  header: string
+  question: string
+  options: AgentQuestionOption[]
+  multiple: boolean
+}
+
+export interface AgentQuestionRequest {
+  requestId: string
+  question: AgentQuestion
+}
+
 export type ChatEvent =
   | { requestId: string; type: 'content'; text: string }
   | { requestId: string; type: 'reasoning'; text: string }
   | { requestId: string; type: 'tool-call'; call: ToolCallInfo }
   | { requestId: string; type: 'tool-result'; result: ToolResultInfo }
   | { requestId: string; type: 'approval'; request: AgentApprovalRequest }
+  | { requestId: string; type: 'question'; request: AgentQuestionRequest }
   | { requestId: string; type: 'multiverse-start'; members: string[] }
   | { requestId: string; type: 'multiverse-member'; result: MultiverseMemberResult }
   | { requestId: string; type: 'multiverse-synthesis'; candidateCount: number }

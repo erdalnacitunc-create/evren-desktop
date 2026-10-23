@@ -385,7 +385,12 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
 
         try {
           const checkpointId = `${requestId}:${toolCallCount}`
-          const execution = await tool.execute(args, { requestId, send, checkpointId })
+          const execution = await tool.execute(args, {
+            requestId,
+            send,
+            checkpointId,
+            signal: controller.signal
+          })
           send({
             requestId,
             type: 'tool-result',

@@ -5,6 +5,7 @@ import type {
   AgentApprovalRequest,
   AgentOptions,
   AgentProfile,
+  AgentQuestionRequest,
   ChatDefaults,
   ChatMessage,
   ChatUsage,
@@ -348,6 +349,9 @@ export function Chat({
   const [finish, setFinish] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [approval, setApproval] = useState<AgentApprovalRequest | null>(null)
+  const [question, setQuestion] = useState<AgentQuestionRequest | null>(null)
+  const [questionAnswers, setQuestionAnswers] = useState<string[]>([])
+  const [questionCustom, setQuestionCustom] = useState('')
 
   const [mvConfirm, setMvConfirm] = useState<MvConfirm | null>(null)
   const [mvResults, setMvResults] = useState<MvResult[]>([])
@@ -636,6 +640,38 @@ export function Chat({
     [onWorkspaceChanged]
   )
 
+  const answerQuestion = useCallback(
+    async (answers: string[]): Promise<void> => {
+      if (!question) return
+      const cleaned = answers.map((answer) => answer.trim()).filter(Boolean)
+      if (cleaned.length === 0) {
+        setNotice('Bir seçenek seçin veya yanıt yazın.')
+        return
+      }
+      const result = await api.agent.answerQuestion(
+        question.requestId,
+        question.question.id,
+        cleaned
+      )
+      if (!result.ok || !result.data) {
+        setNotice('Soru yanıtı iletilemedi.')
+        return
+      }
+      setQuestion(null)
+      setQuestionAnswers([])
+      setQuestionCustom('')
+    },
+    [question]
+  )
+
+  const cancelQuestion = useCallback(async (): Promise<void> => {
+    if (!question) return
+    await api.agent.answerQuestion(question.requestId, question.question.id, [])
+    setQuestion(null)
+    setQuestionAnswers([])
+    setQuestionCustom('')
+  }, [question])
+
   const toggleTodo = useCallback(
     (id: string): void => {
       setTodos((current) => {
@@ -825,6 +861,9 @@ export function Chat({
     setError(null)
     setStreaming(false)
     setApproval(null)
+    setQuestion(null)
+    setQuestionAnswers([])
+    setQuestionCustom('')
     setMvConfirm(null)
     setMvResults([])
     setMvPhase('idle')
@@ -914,6 +953,10 @@ export function Chat({
         }
       } else if (event.type === 'approval') {
         setApproval(event.request)
+      } else if (event.type === 'question') {
+        setQuestion(event.request)
+        setQuestionAnswers([])
+        setQuestionCustom('')
       } else if (event.type === 'multiverse-start') {
         setMvPhase('members')
         setMvResults(event.members.map((member) => ({ modelId: member, status: 'pending' })))
@@ -937,6 +980,7 @@ export function Chat({
         setFinish(event.finishReason)
         setStreaming(false)
         setApproval(null)
+        setQuestion(null)
         setMvPhase('idle')
         setMvConfirm(null)
         requestRef.current = null
@@ -947,6 +991,7 @@ export function Chat({
         setError(friendlyError(event.status, event.error))
         setStreaming(false)
         setApproval(null)
+        setQuestion(null)
         setMvPhase('idle')
         setMvConfirm(null)
         requestRef.current = null
@@ -974,6 +1019,9 @@ export function Chat({
       usageRef.current = null
       setStreaming(true)
       setApproval(null)
+      setQuestion(null)
+      setQuestionAnswers([])
+      setQuestionCustom('')
 
       const capabilities = model.capabilities
       const result = await api.chat.start({
@@ -1926,6 +1974,67 @@ export function Chat({
               </button>
               <button className="btn" onClick={() => void respondApproval(true, true)}>
                 Her zaman izin ver
+              </button>
+            </div>
+          </div>
+        )}
+
+        {question && (
+          <div className="approval question-card">
+            <div className="approval-head">
+              <span>{question.question.header || 'Ajan soru soruyor'}</span>
+            </div>
+            <div className="approval-summary">{question.question.question}</div>
+            {question.question.options.length > 0 && (
+              <div className="question-options">
+                {question.question.options.map((option) => {
+                  const checked = questionAnswers.includes(option.label)
+                  return (
+                    <label key={option.label} className="question-option">
+                      <input
+                        type={question.question.multiple ? 'checkbox' : 'radio'}
+                        name={`question-${question.question.id}`}
+                        checked={checked}
+                        onChange={() => {
+                          if (question.question.multiple) {
+                            setQuestionAnswers((current) =>
+                              checked
+                                ? current.filter((value) => value !== option.label)
+                                : [...current, option.label]
+                            )
+                          } else {
+                            setQuestionAnswers([option.label])
+                          }
+                        }}
+                      />
+                      <span>
+                        <strong>{option.label}</strong>
+                        {option.description ? (
+                          <small className="muted">{option.description}</small>
+                        ) : null}
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+            <input
+              className="question-custom"
+              value={questionCustom}
+              onChange={(event) => setQuestionCustom(event.target.value)}
+              placeholder="Farklı bir yanıt yazın (isteğe bağlı)"
+            />
+            <div className="approval-actions">
+              <button className="btn-ghost danger" onClick={() => void cancelQuestion()}>
+                Vazgeç
+              </button>
+              <button
+                className="btn"
+                onClick={() =>
+                  void answerQuestion([...questionAnswers, questionCustom])
+                }
+              >
+                Yanıtla
               </button>
             </div>
           </div>

@@ -4,6 +4,7 @@ import { promises as fs } from 'fs'
 import { ApiError, getQuota, listModels } from './api'
 import { abortChat, startChat } from './chat'
 import { approvalKey, resolveApproval } from './agent/approval'
+import { resolveQuestion } from './agent/question'
 import {
   cancelSubagentTask,
   getSubagentTask,
@@ -387,6 +388,27 @@ export function registerIpcHandlers(): void {
             permissions: { ...(settings.permissions ?? {}), [category]: 'allow' }
           })
         }
+        return { ok: true, data: resolved }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'agent:answerQuestion',
+    async (
+      _event,
+      requestId: string,
+      questionId: string,
+      answers: string[]
+    ): Promise<Result<boolean>> => {
+      try {
+        const resolved = resolveQuestion(
+          String(requestId ?? ''),
+          String(questionId ?? ''),
+          Array.isArray(answers) ? answers.map((answer) => String(answer)) : []
+        )
         return { ok: true, data: resolved }
       } catch (error) {
         return fail(error)

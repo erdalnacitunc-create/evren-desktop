@@ -125,7 +125,13 @@ export const api = {
       always?: boolean,
       category?: string
     ): Promise<Result<boolean>> =>
-      window.evren.agent.approve(requestId, toolCallId, approved, always, category)
+      window.evren.agent.approve(requestId, toolCallId, approved, always, category),
+    answerQuestion: (
+      requestId: string,
+      questionId: string,
+      answers: string[]
+    ): Promise<Result<boolean>> =>
+      window.evren.agent.answerQuestion(requestId, questionId, answers)
   },
   settings: {
     get: (): Promise<Result<AppSettings>> => window.evren.settings.get(),

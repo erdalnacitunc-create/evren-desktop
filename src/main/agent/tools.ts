@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { toolCategory } from '../../shared/permissions'
 import type { ChatEvent, PermissionCategory, TodoItem } from '../../shared/types'
 import { callMcpTool, listServerTools, type AgentMcpTool } from '../mcp/manager'
@@ -11,6 +12,7 @@ import {
 } from '../mcp/manager'
 import { callPluginTool, listPluginTools, type AgentPluginTool } from '../plugins/manager'
 import { BrowserSession } from './browser'
+import { waitForQuestion } from './question'
 import { captureScreen, runComputerCommand, toSendKeys } from './computer'
 import {
   deleteWorkspaceFile,
@@ -47,6 +49,7 @@ import type { WorkspaceEntry } from '../../shared/types'
 export interface ToolContext {
   requestId: string
   checkpointId?: string
+  signal?: AbortSignal
   send: (event: ChatEvent) => void
 }
 
@@ -1179,6 +1182,77 @@ export function createTools(options: {
       }
     })
   }
+
+  tools.push({
+    name: 'question',
+    category: 'read',
+    description:
+      'Kullanıcıya seçenekli bir soru sorar ve yanıtını bekler. Belirsiz bir tercih, ' +
+      'hedef veya onay gerektiğinde kullan. Seçenek yoksa kullanıcı serbest metin girebilir.',
+    parameters: {
+      type: 'object',
+      properties: {
+        header: { type: 'string', description: 'Kısa başlık (en fazla 30 karakter).' },
+        question: { type: 'string', description: 'Kullanıcıya gösterilecek soru.' },
+        options: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Seçenekler. Boş bırakılırsa yalnızca serbest metin sorulur.'
+        },
+        multiple: {
+          type: 'boolean',
+          description: 'Birden fazla seçenek seçilebilir mi?'
+        }
+      },
+      required: ['question']
+    },
+    summary: (args) => `Soru: ${str(args.question).slice(0, 100)}`,
+    execute: async (args, ctx) => {
+      const questionId = randomUUID()
+      const rawOptions = Array.isArray(args.options) ? args.options : []
+      const options = rawOptions
+        .map((value) => {
+          if (typeof value === 'string') return { label: value.trim() }
+          if (value && typeof value === 'object') {
+            const item = value as { label?: unknown; description?: unknown }
+            const label = str(item.label).trim()
+            if (!label) return null
+            return {
+              label,
+              description: str(item.description).trim() || undefined
+            }
+          }
+          return null
+        })
+        .filter((value): value is { label: string; description?: string } => !!value)
+        .slice(0, 12)
+
+      ctx.send({
+        requestId: ctx.requestId,
+        type: 'question',
+        request: {
+          requestId: ctx.requestId,
+          question: {
+            id: questionId,
+            header: str(args.header, 'Soru').slice(0, 60),
+            question: str(args.question),
+            options,
+            multiple: args.multiple === true
+          }
+        }
+      })
+
+      const answers = await waitForQuestion(
+        ctx.requestId,
+        questionId,
+        ctx.signal ?? new AbortController().signal
+      )
+      if (!answers || answers.length === 0) {
+        return { ok: false, content: 'Kullanıcı soruyu yanıtlamadı veya iptal etti.' }
+      }
+      return { ok: true, content: `Kullanıcı yanıtı: ${answers.join(', ')}` }
+    }
+  })
 
   tools.push({
     name: 'webfetch',

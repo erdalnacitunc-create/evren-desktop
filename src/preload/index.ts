@@ -70,7 +70,9 @@ export const api = {
       approved: boolean,
       always?: boolean,
       category?: string
-    ) => ipcRenderer.invoke('agent:approve', requestId, toolCallId, approved, always, category)
+    ) => ipcRenderer.invoke('agent:approve', requestId, toolCallId, approved, always, category),
+    answerQuestion: (requestId: string, questionId: string, answers: string[]) =>
+      ipcRenderer.invoke('agent:answerQuestion', requestId, questionId, answers)
   },
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),

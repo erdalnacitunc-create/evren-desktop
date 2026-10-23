@@ -3,6 +3,7 @@ import { ApiError } from './api'
 import { runAgent } from './agent/loop'
 import { runMultiverse } from './multiverse'
 import { rejectAllForRequest } from './agent/approval'
+import { rejectAllQuestions } from './agent/question'
 import { loadApiKey } from './credentials'
 import { getSettings } from './settings'
 import { getWorkspaceRoot } from './workspace'
@@ -16,6 +17,7 @@ const controllers = new Map<string, AbortController>()
 export function abortAllChats(): void {
   for (const [requestId, controller] of controllers) {
     rejectAllForRequest(requestId)
+    rejectAllQuestions(requestId)
     controller.abort()
   }
   controllers.clear()
@@ -25,6 +27,7 @@ export function abortChat(requestId: string): boolean {
   const controller = controllers.get(requestId)
   if (!controller) return false
   rejectAllForRequest(requestId)
+  rejectAllQuestions(requestId)
   controller.abort()
   controllers.delete(requestId)
   return true

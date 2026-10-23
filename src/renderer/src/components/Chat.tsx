@@ -33,6 +33,7 @@ import { TerminalPanel } from './TerminalPanel'
 const WORKSPACE_TOOL_NAMES = new Set([
   'write_file',
   'edit_file',
+  'patch',
   'delete_file',
   'create_directory',
   'run_command',

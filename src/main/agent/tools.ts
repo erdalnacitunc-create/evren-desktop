@@ -991,6 +991,115 @@ export function createTools(options: {
     })
 
     tools.push({
+      name: 'patch',
+      description:
+        'Çok dosyalı patch uygular. *** Add File, *** Update File ve *** Delete File ' +
+        'bölümlerini destekler. Güncellemelerde @@ hunk başlıkları ve -/+ satırları kullanılır.',
+      category: 'edit',
+      parameters: {
+        type: 'object',
+        properties: {
+          patch_text: {
+            type: 'string',
+            description: '*** Begin Patch / *** Add File / *** Update File / *** Delete File biçiminde patch.'
+          }
+        },
+        required: ['patch_text']
+      },
+      summary: () => 'Çok dosyalı patch uygula',
+      execute: async (args, ctx) => {
+        const text = str(args.patch_text)
+        if (!text.trim()) return { ok: false, content: 'Patch metni boş.' }
+
+        const lines = text.replace(/\r\n/g, '\n').split('\n')
+        type Section = { kind: 'add' | 'update' | 'delete'; path: string; lines: string[] }
+        const sections: Section[] = []
+        let current: Section | null = null
+        for (const line of lines) {
+          const add = /^\*\*\* Add File:\s*(.+)$/.exec(line)
+          const update = /^\*\*\* Update File:\s*(.+)$/.exec(line)
+          const del = /^\*\*\* Delete File:\s*(.+)$/.exec(line)
+          if (add || update || del) {
+            if (current) sections.push(current)
+            current = {
+              kind: add ? 'add' : update ? 'update' : 'delete',
+              path: (add ?? update ?? del)?.[1]?.trim() ?? '',
+              lines: []
+            }
+            continue
+          }
+          if (line.startsWith('*** Begin Patch') || line.startsWith('*** End Patch')) continue
+          if (current) current.lines.push(line)
+        }
+        if (current) sections.push(current)
+        if (sections.length === 0) {
+          return { ok: false, content: 'Patch içinde dosya bölümü bulunamadı.' }
+        }
+
+        const applied: string[] = []
+        for (const section of sections) {
+          if (!section.path) return { ok: false, content: 'Patch dosya yolu eksik.' }
+          try {
+            if (section.kind === 'add') {
+              const content = section.lines
+                .filter((line) => line.startsWith('+'))
+                .map((line) => line.slice(1))
+                .join('\n')
+              await writeWorkspaceFile(section.path, content, undefined, ctx.checkpointId)
+              applied.push(`eklendi: ${section.path}`)
+              continue
+            }
+            if (section.kind === 'delete') {
+              await deleteWorkspaceFile(section.path, undefined, ctx.checkpointId)
+              applied.push(`silindi: ${section.path}`)
+              continue
+            }
+
+            const existing = await readWorkspaceFile(section.path)
+            if (existing.binary) throw new Error('İkili dosya patch ile düzenlenemez.')
+            let content = existing.content.replace(/\r\n/g, '\n')
+            type Hunk = { old: string[]; next: string[] }
+            const hunks: Hunk[] = []
+            let hunk: Hunk | null = null
+            for (const line of section.lines) {
+              if (line.startsWith('@@')) {
+                if (hunk) hunks.push(hunk)
+                hunk = { old: [], next: [] }
+                continue
+              }
+              if (!hunk) continue
+              if (line.startsWith(' ')) {
+                hunk.old.push(line.slice(1))
+                hunk.next.push(line.slice(1))
+              } else if (line.startsWith('-')) {
+                hunk.old.push(line.slice(1))
+              } else if (line.startsWith('+')) {
+                hunk.next.push(line.slice(1))
+              }
+            }
+            if (hunk) hunks.push(hunk)
+            if (hunks.length === 0) throw new Error('Güncelleme için @@ hunk bulunamadı.')
+            for (const item of hunks) {
+              const oldBlock = item.old.join('\n')
+              const newBlock = item.next.join('\n')
+              const index = content.indexOf(oldBlock)
+              if (index < 0) throw new Error('Patch bağlamı dosyada bulunamadı.')
+              content = content.slice(0, index) + newBlock + content.slice(index + oldBlock.length)
+            }
+            await writeWorkspaceFile(section.path, content, undefined, ctx.checkpointId)
+            applied.push(`güncellendi: ${section.path}`)
+          } catch (error) {
+            return {
+              ok: false,
+              content: `Patch hatası (${section.path}): ${error instanceof Error ? error.message : String(error)}`
+            }
+          }
+        }
+        return { ok: true, content: applied.join('\n') }
+      }
+    })
+
+    tools.push({
       name: 'run_command',
       description:
         'Çalışma alanında bir kabuk komutu çalıştırır (Windows PowerShell / Unix sh). ' +

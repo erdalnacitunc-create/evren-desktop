@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { promises as fs } from 'fs'
 import { existsSync } from 'fs'
 import type { Dirent } from 'fs'
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import {
   basename,
@@ -1001,26 +1001,53 @@ export interface CommandResult {
   stdout: string
   stderr: string
   exitCode: number
+  background?: boolean
+  pid?: number
 }
 
 export async function runWorkspaceCommand(
   command: string,
-  timeoutMs?: number
+  timeoutOrOptions?: number | { timeoutMs?: number; background?: boolean }
 ): Promise<CommandResult> {
   const root = await requireRoot()
+  const options =
+    typeof timeoutOrOptions === 'object' && timeoutOrOptions !== null
+      ? timeoutOrOptions
+      : { timeoutMs: timeoutOrOptions }
   const timeout = Math.min(
     MAX_COMMAND_TIMEOUT,
-    Math.max(1000, Math.round(Number(timeoutMs) || 60_000))
+    Math.max(1000, Math.round(Number(options.timeoutMs) || 60_000))
   )
   const isWindows = process.platform === 'win32'
   const file = isWindows ? 'powershell.exe' : '/bin/sh'
   const args = isWindows
     ? ['-NoProfile', '-NonInteractive', '-Command', command]
     : ['-c', command]
+  const env = await withAndroidPath()
+
+  if (options.background) {
+    const child = spawn(file, args, {
+      cwd: root,
+      env,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    })
+    child.unref()
+    return {
+      command,
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+      background: true,
+      pid: child.pid
+    }
+  }
+
   try {
     const result = await execFileAsync(file, args, {
       cwd: root,
-      env: await withAndroidPath(),
+      env,
       timeout,
       maxBuffer: 4 * 1024 * 1024,
       windowsHide: true

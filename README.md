@@ -8,6 +8,7 @@ anahtarini ekleyerek erisebildigi modelleri kullanir.
 - **Temiz oda / yasal ilkeler:** bkz. `docs/LEGAL.md`
 - **Plan:** `docs/PLAN.md`
 - **API notlari:** `docs/API-NOTES.md`
+- **Web arama:** `docs/WEBSEARCH.md`
 - **Guvenlik denetimi:** `docs/AUDIT.md` (`npm run audit:security`, `npm run test:e2e`)
 - **Code signing policy:** [`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md)
 - **Code of conduct:** [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)

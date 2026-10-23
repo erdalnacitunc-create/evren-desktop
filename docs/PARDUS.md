@@ -16,15 +16,15 @@ Windows `.exe` ve Linux `.deb` aynı sürüm numarasını kullanır.
 ## Pardus'a kurulum
 
 ```bash
-sudo apt install ./evren-desktop_0.2.1_amd64.deb
+sudo apt install ./evren-desktop_0.2.2_amd64.deb
 evren-desktop
 ```
 
 veya:
 
 ```bash
-chmod +x "EVREN Desktop-0.2.1.AppImage"
-./"EVREN Desktop-0.2.1.AppImage"
+chmod +x "EVREN Desktop-0.2.2.AppImage"
+./"EVREN Desktop-0.2.2.AppImage"
 ```
 
 ## Derleme

@@ -77,7 +77,7 @@ Token'ı sohbete veya koda yazma.
 ## 6. Doğrulama
 
 ```powershell
-Get-AuthenticodeSignature "release\EVREN-Desktop-Setup-0.2.1-x64.exe" |
+Get-AuthenticodeSignature "release\EVREN-Desktop-Setup-0.2.2-x64.exe" |
   Format-List Status, StatusMessage, SignerCertificate
 ```
 

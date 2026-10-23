@@ -387,6 +387,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           const checkpointId = `${requestId}:${toolCallCount}`
           const execution = await tool.execute(args, {
             requestId,
+            sessionId: payload.sessionId,
             send,
             checkpointId,
             signal: controller.signal

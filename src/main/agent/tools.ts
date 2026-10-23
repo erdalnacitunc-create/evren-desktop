@@ -30,6 +30,7 @@ import { detectProjectChecks, runProjectChecks, formatWorkspaceFile } from '../c
 import { buildRepoMap } from '../repoMap'
 import { searchCodeIndex } from '../codeIndex'
 import { getSettings } from '../settings'
+import { listSessions, renameSession, searchSessions } from '../sessionStore'
 import {
   addGitWorktree,
   commitGit,
@@ -49,6 +50,7 @@ import type { WorkspaceEntry } from '../../shared/types'
 
 export interface ToolContext {
   requestId: string
+  sessionId?: string
   checkpointId?: string
   signal?: AbortSignal
   send: (event: ChatEvent) => void
@@ -1353,6 +1355,73 @@ export function createTools(options: {
       }
     })
   }
+
+  tools.push({
+    name: 'session',
+    category: 'read',
+    description:
+      'Oturumları listeler, arar veya mevcut oturumu yeniden adlandırır. ' +
+      'action: list, search, rename. rename için title gerekir.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'search', 'rename'],
+          description: 'Yapılacak işlem.'
+        },
+        query: { type: 'string', description: 'search için arama metni.' },
+        title: { type: 'string', description: 'rename için yeni başlık.' }
+      },
+      required: ['action']
+    },
+    summary: (args) => `Oturum: ${str(args.action)}`,
+    execute: async (args, ctx) => {
+      const action = str(args.action)
+      if (action === 'list') {
+        const sessions = await listSessions()
+        return {
+          ok: true,
+          content: JSON.stringify(
+            sessions.slice(0, 80).map((session) => ({
+              id: session.id,
+              title: session.title,
+              updatedAt: session.updatedAt,
+              messageCount: session.messageCount
+            })),
+            null,
+            2
+          )
+        }
+      }
+      if (action === 'search') {
+        const query = str(args.query).trim()
+        if (!query) return { ok: false, content: 'search için query gerekli.' }
+        const sessions = await searchSessions(query)
+        return {
+          ok: true,
+          content: JSON.stringify(
+            sessions.slice(0, 40).map((session) => ({
+              id: session.id,
+              title: session.title,
+              updatedAt: session.updatedAt
+            })),
+            null,
+            2
+          )
+        }
+      }
+      if (action === 'rename') {
+        if (!ctx.sessionId) return { ok: false, content: 'Aktif oturum bulunamadı.' }
+        const title = str(args.title).trim()
+        if (!title) return { ok: false, content: 'rename için title gerekli.' }
+        const session = await renameSession(ctx.sessionId, title)
+        if (!session) return { ok: false, content: 'Oturum yeniden adlandırılamadı.' }
+        return { ok: true, content: `Oturum yeniden adlandırıldı: ${session.title}` }
+      }
+      return { ok: false, content: `Bilinmeyen session action: ${action}` }
+    }
+  })
 
   tools.push({
     name: 'question',

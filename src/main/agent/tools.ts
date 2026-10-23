@@ -1373,11 +1373,12 @@ export function createTools(options: {
 
   tools.push({
     name: 'execute',
-    category: 'read',
+    category: 'execute',
     description:
-      'Code Mode (güvenli alt küme): read-only araçları JavaScript ile toplu çağırır. ' +
-      'Sandbox içinde `tools.read_file({path})`, `tools.glob({pattern})`, `tools.webfetch({url})` ' +
-      'gibi çağrılar yapılabilir; yazma ve shell araçları kullanılamaz.',
+      'Code Mode: araçları JavaScript ile toplu çağırır. Sandbox içinde ' +
+      '`tools.read_file`, `tools.write_file`, `tools.edit_file`, `tools.patch`, ' +
+      '`tools.run_command`, `tools.git`, `tools.webfetch` gibi çağrılar yapılabilir. ' +
+      'Dış onay kategorisi execute’tur; onaylanan script içindeki araçlar çalışır.',
     parameters: {
       type: 'object',
       properties: {
@@ -1389,25 +1390,22 @@ export function createTools(options: {
       },
       required: ['script']
     },
-    summary: () => 'Code Mode (read-only)',
+    summary: (args) => `Code Mode: ${str(args.script).slice(0, 120)}`,
     execute: async (args, ctx) => {
       const script = str(args.script)
       if (!script.trim()) return { ok: false, content: 'Script boş.' }
-      const allowed = new Set([
-        'read_file',
-        'list_files',
-        'glob',
-        'grep',
-        'repo_map',
-        'code_search',
-        'webfetch',
-        'websearch',
-        'browser_snapshot',
-        'browser_console',
-        'browser_network',
-        'browser_html',
-        'browser_performance'
+      const excluded = new Set([
+        'execute',
+        'question',
+        'spawn_agent',
+        'task_status',
+        'task_wait',
+        'task_cancel',
+        'task_list'
       ])
+      const allowed = new Set(
+        tools.map((item) => item.name).filter((name) => !excluded.has(name))
+      )
       const logs: string[] = []
       const api = Object.fromEntries(
         [...allowed].map((name) => [

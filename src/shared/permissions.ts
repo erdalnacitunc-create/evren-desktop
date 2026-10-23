@@ -36,10 +36,11 @@ export const PERMISSION_DESCRIPTIONS: Record<PermissionCategory, string> = {
 export function toolCategory(toolName: string): PermissionCategory {
   if (toolName.startsWith('browser_')) return 'browser'
   if (toolName.startsWith('computer_')) return 'computer'
-  if (toolName === 'run_command') return 'execute'
+  if (toolName === 'run_command' || toolName === 'execute') return 'execute'
   if (
     toolName === 'write_file' ||
     toolName === 'edit_file' ||
+    toolName === 'patch' ||
     toolName === 'delete_file' ||
     toolName === 'create_directory'
   ) {

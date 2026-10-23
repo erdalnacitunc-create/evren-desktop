@@ -1,7 +1,17 @@
 # SignPath Foundation ile Windows İmzalama
 
-EVREN Desktop Windows installer'ı SignPath Foundation üzerinden Authenticode ile
-imzalanacaktır. SignPath, açık kaynak projelere ücretsiz kod imzalama sağlar;
+## Durum: başvuru reddedildi
+
+SignPath Foundation başvurusu **Ekim 2026'da reddedildi**. Gerekçe, projenin
+programın istediği düzeyde kamusal görünürlük ve bağımsız referansa henüz sahip
+olmamasıydı. Windows release'leri şu an **imzasız**dır.
+
+Aşağıdaki bölümler, ileride yeniden başvuru veya farklı bir imzalama sağlayıcısı
+kullanılması durumunda izlenecek referans süreci tanımlar. Mevcut sürümlerde
+SignPath imzası yoktur.
+
+EVREN Desktop Windows installer'ının ileride Authenticode ile imzalanması
+planlanmaktadır. SignPath, açık kaynak projelere ücretsiz kod imzalama sağlar;
 private key HSM'de tutulur ve GitHub Actions üzerinden imzalama yapılır.
 
 ## 1. Başvuru öncesi kontrol

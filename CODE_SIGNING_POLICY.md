@@ -3,18 +3,20 @@
 EVREN Desktop is an open-source Windows and Linux desktop client for the EVREN
 LLM API.
 
-**Status:** Application to SignPath Foundation has been submitted. Release
-signing is pending approval.
+**Status:** The SignPath Foundation application was **not approved** in October
+2026. The program requires a level of public visibility and independent
+recognition that this project has not yet established. Windows releases are
+currently **unsigned**. The project may reapply after broader adoption or use a
+commercial code-signing certificate.
 
 ## Code signing
 
-Free code signing is provided by [SignPath.io](https://about.signpath.io),
-certificate by [SignPath Foundation](https://signpath.org).
+Code signing is **not currently available** for EVREN Desktop releases.
 
-Only artifacts built by GitHub Actions from this repository are submitted for
-signing. The signing private key is held by SignPath in a Hardware Security
-Module (HSM); this project does not store or distribute a code-signing private
-key.
+If signing is added in the future, only artifacts built by GitHub Actions from
+this repository will be submitted for signing. The signing private key will be
+held by the signing provider (for example, an HSM); this project does not store
+or distribute a code-signing private key.
 
 The following Windows artifacts are intended to be signed:
 

@@ -17,17 +17,15 @@ anahtarini ekleyerek erisebildigi modelleri kullanir.
 
 ## Code signing policy
 
-EVREN Desktop is applying to [SignPath Foundation](https://signpath.org) for
-free code signing. Upon approval:
+The SignPath Foundation application was **not approved** in October 2026
+because the project has not yet established the required level of public
+visibility. Windows releases are therefore **unsigned**.
 
-> Free code signing provided by [SignPath.io](https://about.signpath.io),
-> certificate by [SignPath Foundation](https://signpath.org).
-
-Only Windows artifacts built by GitHub Actions from this repository are
-submitted for signing. The private key is held by SignPath in an HSM; this
-project does not store a code-signing private key. See
-[`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md) for the full policy, team
-roles, and verification instructions.
+If signing is added in the future, only Windows artifacts built by GitHub
+Actions from this repository will be submitted for signing. This project does
+not store a code-signing private key. See
+[`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md) for the full policy, status,
+team roles, and verification instructions.
 
 ## Gelistirme
 
@@ -210,8 +208,10 @@ npm run build:win  # Windows NSIS kurulum paketi
 - Linux CI (GitHub Actions / Ubuntu)
 - Önceki sürümlerdeki MCP, terminal, ACP, GitHub App ve hafıza özellikleri
 
-Windows kod imzalama SignPath Foundation başvurusu sürecindedir; bu beta
-installer imzasız olabilir. İmzalı sürüm ayrı bir release olarak yayınlanacaktır.
+SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
+imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.
+İmzalama seçenekleri (yeniden başvuru veya ticari sertifika) ileride
+değerlendirilecektir.
 
 - Gizlilik: `PRIVACY.md`
 - Güncelleme: `docs/UPDATE.md`

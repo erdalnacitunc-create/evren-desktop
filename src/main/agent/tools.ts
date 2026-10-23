@@ -33,6 +33,11 @@ import { searchCodeIndex } from '../codeIndex'
 import { getSettings } from '../settings'
 import { listSessions, renameSession, searchSessions } from '../sessionStore'
 import {
+  listReferenceDirectory,
+  listReferences,
+  readReference
+} from '../references'
+import {
   addGitWorktree,
   commitGit,
   createGitPr,
@@ -1445,6 +1450,57 @@ export function createTools(options: {
           content: `Code Mode hatası: ${error instanceof Error ? error.message : String(error)}`
         }
       }
+    }
+  })
+
+  tools.push({
+    name: 'reference',
+    category: 'read',
+    description:
+      'Workspace dışındaki izinli referans klasörlerini listeler veya read-only dosya okur. ' +
+      'Yol biçimi: `isim:göreli/yol` veya izinli mutlak yol. Yazma/komut çalıştırma desteklenmez.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'read'],
+          description: 'list: referansları/klasörü listele; read: dosya oku.'
+        },
+        path: {
+          type: 'string',
+          description: 'read veya belirli bir klasörü listeleme için yol.'
+        },
+        offset: { type: 'number', description: 'read için başlangıç satırı (1 tabanlı).' },
+        limit: { type: 'number', description: 'read için maksimum satır (varsayılan 800).' }
+      },
+      required: ['action']
+    },
+    summary: (args) => `Referans: ${str(args.action)} ${str(args.path).slice(0, 80)}`,
+    execute: async (args) => {
+      const action = str(args.action)
+      if (action === 'list') {
+        if (str(args.path)) {
+          return {
+            ok: true,
+            content: JSON.stringify(await listReferenceDirectory(str(args.path)), null, 2)
+          }
+        }
+        return {
+          ok: true,
+          content: JSON.stringify(await listReferences(), null, 2)
+        }
+      }
+      if (action === 'read') {
+        const path = str(args.path)
+        if (!path) return { ok: false, content: 'read için path gerekli.' }
+        const file = await readReference(path, num(args.offset, 1), num(args.limit, 800))
+        return {
+          ok: true,
+          content: `${file.path} (${file.size} bayt${file.truncated ? ', kısaltıldı' : ''})\n${file.content}`
+        }
+      }
+      return { ok: false, content: `Bilinmeyen reference action: ${action}` }
     }
   })
 

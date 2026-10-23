@@ -171,6 +171,11 @@ export interface UpdateStatus {
   canCheck: boolean
 }
 
+export interface ReferenceDirectory {
+  name: string
+  path: string
+}
+
 export interface AppSettings extends ChatDefaults {
   baseUrl: string
   theme?: ThemeMode
@@ -179,6 +184,7 @@ export interface AppSettings extends ChatDefaults {
   computerTools?: boolean
   workspacePath?: string | null
   workspaceTools?: boolean
+  references?: ReferenceDirectory[]
   githubOAuthClientId?: string
   permissions?: PermissionSettings
   hooks?: HookSettings

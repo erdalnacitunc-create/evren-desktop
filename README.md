@@ -9,6 +9,7 @@ anahtarini ekleyerek erisebildigi modelleri kullanir.
 - **Plan:** `docs/PLAN.md`
 - **API notlari:** `docs/API-NOTES.md`
 - **Web arama:** `docs/WEBSEARCH.md`
+- **External references:** `docs/REFERENCES.md`
 - **Guvenlik denetimi:** `docs/AUDIT.md` (`npm run audit:security`, `npm run test:e2e`)
 - **Code signing policy:** [`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md)
 - **Code of conduct:** [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)

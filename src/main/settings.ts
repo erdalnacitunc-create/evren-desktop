@@ -92,6 +92,20 @@ function normalize(input: Partial<AppSettings>): AppSettings {
   } else if (input.workspacePath === null) {
     result.workspacePath = null
   }
+  if (Array.isArray(input.references)) {
+    const references = input.references
+      .filter(
+        (item): item is { name: string; path: string } =>
+          !!item &&
+          typeof item.name === 'string' &&
+          typeof item.path === 'string' &&
+          /^[a-zA-Z0-9_.-]{1,64}$/.test(item.name.trim()) &&
+          item.path.trim().length > 0
+      )
+      .map((item) => ({ name: item.name.trim(), path: item.path.trim() }))
+      .slice(0, 32)
+    if (references.length > 0) result.references = references
+  }
   const permissions = normalizePermissions(input.permissions)
   if (Object.keys(permissions).length > 0) result.permissions = permissions
   const hooks = normalizeHooks(input.hooks)

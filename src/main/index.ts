@@ -27,6 +27,7 @@ import {
 import { openExternalSafe } from './safeOpen'
 import { initSubagentTaskStore, resumeInterruptedSubagentTasks } from './agent/taskManager'
 import { getSettings } from './settings'
+import { cleanupTemporaryWorkspaces } from './workspace'
 import { loadWindowState, trackWindowState } from './windowState'
 
 const isDev = !!process.env['ELECTRON_RENDERER_URL']
@@ -358,6 +359,7 @@ app.whenReady().then(async () => {
   }
   await startScheduler()
   await applyHeadlessSettings()
+  void cleanupTemporaryWorkspaces()
   await createWindow()
   initUpdater()
   setupTray()

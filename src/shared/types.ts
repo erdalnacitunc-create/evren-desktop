@@ -575,6 +575,7 @@ export interface RepoInspection {
 export interface WorkspaceInfo {
   path: string | null
   exists: boolean
+  temporary?: boolean
 }
 
 export interface WorkspaceEntry {

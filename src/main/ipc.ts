@@ -126,6 +126,7 @@ import {
 } from './headless'
 import {
   clearWorkspacePath,
+  createTemporaryWorkspace,
   getWorkspaceInfo,
   getWorkspaceTree,
   listWorkspaceChanges,
@@ -1287,6 +1288,14 @@ export function registerIpcHandlers(): void {
         return { ok: true, data: await getWorkspaceInfo() }
       }
       return { ok: true, data: await setWorkspacePath(result.filePaths[0]) }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  ipcMain.handle('workspace:createTemp', async (): Promise<Result<WorkspaceInfo>> => {
+    try {
+      return { ok: true, data: await createTemporaryWorkspace() }
     } catch (error) {
       return fail(error)
     }

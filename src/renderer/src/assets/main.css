@@ -1370,6 +1370,20 @@ input {
   gap: 10px;
 }
 
+.tool-card > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-card[open] > summary {
+  margin-bottom: 6px;
+}
+
 .tool-name {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12px;

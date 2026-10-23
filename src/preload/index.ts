@@ -228,6 +228,7 @@ export const api = {
   workspace: {
     get: () => ipcRenderer.invoke('workspace:get'),
     choose: () => ipcRenderer.invoke('workspace:choose'),
+    createTemp: () => ipcRenderer.invoke('workspace:createTemp'),
     set: (path: string) => ipcRenderer.invoke('workspace:set', path),
     clear: () => ipcRenderer.invoke('workspace:clear'),
     tree: () => ipcRenderer.invoke('workspace:tree'),

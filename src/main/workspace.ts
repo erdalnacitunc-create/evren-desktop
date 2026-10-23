@@ -3,6 +3,7 @@ import { promises as fs } from 'fs'
 import { existsSync } from 'fs'
 import type { Dirent } from 'fs'
 import { execFile } from 'child_process'
+import { randomUUID } from 'crypto'
 import {
   basename,
   dirname,
@@ -14,6 +15,7 @@ import {
 } from 'path'
 import { promisify } from 'util'
 import { getSettings, updateSettings } from './settings'
+import { withAndroidPath } from './android'
 import type {
   WorkspaceChange,
   WorkspaceCheckpoint,
@@ -108,10 +110,105 @@ export async function getWorkspaceRoot(): Promise<string | null> {
   }
 }
 
+const TEMP_WORKSPACE_DIR = 'evren-workspaces'
+const TEMP_WORKSPACE_MARKER = '.evren-workspace.json'
+const TEMP_WORKSPACE_TTL_MS = 24 * 60 * 60 * 1000
+
+function tempWorkspaceBase(): string {
+  return join(app.getPath('temp'), TEMP_WORKSPACE_DIR)
+}
+
+export function isTemporaryWorkspacePath(value: string | null | undefined): boolean {
+  if (!value) return false
+  try {
+    const base = resolve(tempWorkspaceBase())
+    const target = resolve(value)
+    const rel = relative(base, target)
+    return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+  } catch {
+    return false
+  }
+}
+
+async function tempWorkspaceAge(path: string): Promise<number> {
+  try {
+    const raw = await fs.readFile(join(path, TEMP_WORKSPACE_MARKER), 'utf8')
+    const parsed = JSON.parse(raw) as { createdAt?: number }
+    const createdAt = Number(parsed.createdAt)
+    if (Number.isFinite(createdAt) && createdAt > 0) return Date.now() - createdAt
+  } catch {
+    // marker yoksa/bozuksa mtime kullan
+  }
+  try {
+    const stat = await fs.stat(path)
+    return Date.now() - stat.mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Yalnızca uygulamanın temp kökü altındaki, marker dosyası olan ve TTL'i
+ * geçmiş geçici workspace'leri siler. Kullanıcı klasörlerine dokunmaz.
+ */
+export async function cleanupTemporaryWorkspaces(
+  maxAgeMs = TEMP_WORKSPACE_TTL_MS
+): Promise<number> {
+  const base = tempWorkspaceBase()
+  let entries: Dirent[]
+  try {
+    entries = await fs.readdir(base, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+
+  let removed = 0
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const target = join(base, entry.name)
+    if ((await tempWorkspaceAge(target)) < maxAgeMs) continue
+    try {
+      await fs.access(join(target, TEMP_WORKSPACE_MARKER))
+      await fs.rm(target, { recursive: true, force: true })
+      removed += 1
+    } catch {
+      // marker yoksa veya dosya kilitliyse dokunma
+    }
+  }
+  return removed
+}
+
+export async function createTemporaryWorkspace(): Promise<WorkspaceInfo> {
+  await cleanupTemporaryWorkspaces()
+  const base = tempWorkspaceBase()
+  await fs.mkdir(base, { recursive: true })
+  const dir = join(base, `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
+  await fs.mkdir(dir, { recursive: false })
+  await fs.writeFile(
+    join(dir, TEMP_WORKSPACE_MARKER),
+    JSON.stringify(
+      {
+        createdAt: Date.now(),
+        app: 'evren-desktop',
+        note: 'Temporary workspace created by EVREN Desktop'
+      },
+      null,
+      2
+    ),
+    'utf8'
+  )
+  await updateSettings({ workspacePath: dir })
+  return { path: dir, exists: true, temporary: true }
+}
+
 export async function getWorkspaceInfo(): Promise<WorkspaceInfo> {
   const settings = await getSettings()
   const root = await getWorkspaceRoot()
-  return { path: root ?? settings.workspacePath ?? null, exists: !!root }
+  return {
+    path: root ?? settings.workspacePath ?? null,
+    exists: !!root,
+    temporary: isTemporaryWorkspacePath(root ?? settings.workspacePath ?? null)
+  }
 }
 
 export async function setWorkspacePath(raw: string): Promise<WorkspaceInfo> {
@@ -129,7 +226,15 @@ export async function setWorkspacePath(raw: string): Promise<WorkspaceInfo> {
 }
 
 export async function clearWorkspacePath(): Promise<WorkspaceInfo> {
+  const current = await getWorkspaceRoot()
   await updateSettings({ workspacePath: null })
+  if (isTemporaryWorkspacePath(current) && current) {
+    try {
+      await fs.rm(current, { recursive: true, force: true })
+    } catch {
+      // kilitliyse TTL temizliğine bırak
+    }
+  }
   return { path: null, exists: false }
 }
 
@@ -885,6 +990,7 @@ export async function runWorkspaceCommand(
   try {
     const result = await execFileAsync(file, args, {
       cwd: root,
+      env: await withAndroidPath(),
       timeout,
       maxBuffer: 4 * 1024 * 1024,
       windowsHide: true

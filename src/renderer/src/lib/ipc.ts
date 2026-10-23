@@ -323,6 +323,7 @@ export const api = {
   workspace: {
     get: (): Promise<Result<WorkspaceInfo>> => window.evren.workspace.get(),
     choose: (): Promise<Result<WorkspaceInfo>> => window.evren.workspace.choose(),
+    createTemp: (): Promise<Result<WorkspaceInfo>> => window.evren.workspace.createTemp(),
     set: (path: string): Promise<Result<WorkspaceInfo>> => window.evren.workspace.set(path),
     clear: (): Promise<Result<WorkspaceInfo>> => window.evren.workspace.clear(),
     tree: (): Promise<Result<WorkspaceEntry[]>> => window.evren.workspace.tree(),

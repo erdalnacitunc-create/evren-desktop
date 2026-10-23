@@ -336,6 +336,13 @@ export function Workspace({
     if (config.ok) onSettingsChange(config.data)
   }, [onSettingsChange])
 
+  const createTempWorkspace = useCallback(async (): Promise<void> => {
+    const result = await api.workspace.createTemp()
+    if (!result.ok) return
+    const config = await api.settings.get()
+    if (config.ok) onSettingsChange(config.data)
+  }, [onSettingsChange])
+
   const clearWorkspace = useCallback(async (): Promise<void> => {
     const result = await api.workspace.clear()
     if (!result.ok) return
@@ -349,7 +356,9 @@ export function Workspace({
   }, [onSettingsChange])
 
   const workspaceName = settings.workspacePath
-    ? settings.workspacePath.split(/[\\/]/).filter(Boolean).pop() ?? settings.workspacePath
+    ? settings.workspacePath.includes('evren-workspaces')
+      ? 'Geçici'
+      : settings.workspacePath.split(/[\\/]/).filter(Boolean).pop() ?? settings.workspacePath
     : null
 
   const cycleTheme = useCallback((): void => {
@@ -800,6 +809,16 @@ export function Workspace({
                 >
                   {workspaceName ? `Klasör: ${workspaceName}` : 'Klasör Seç'}
                 </button>
+
+                {!settings.workspacePath && (
+                  <button
+                    className="btn-ghost"
+                    onClick={() => void createTempWorkspace()}
+                    title="Bu oturum için geçici bir çalışma alanı oluştur"
+                  >
+                    Geçici Klasör
+                  </button>
+                )}
 
                 <button
                   className={`btn-ghost ${multiverseEnabled ? 'active' : ''}`}

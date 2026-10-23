@@ -1180,6 +1180,88 @@ export function createTools(options: {
     })
   }
 
+  tools.push({
+    name: 'webfetch',
+    category: 'read',
+    description:
+      'Bir HTTP/HTTPS URLsinin içeriğini metin olarak getirir. Dokümantasyon, API yanıtı veya ' +
+      'hata sayfası okumak için kullan. Yerel/özel ağ adresleri engellenir.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Getirilecek http(s) URL.' },
+        format: {
+          type: 'string',
+          enum: ['text', 'html'],
+          description: 'Dönen içerik biçimi (varsayılan text).'
+        },
+        max_chars: {
+          type: 'number',
+          description: 'Döndürülecek maksimum karakter (varsayılan 120000).'
+        },
+        timeout_ms: {
+          type: 'number',
+          description: 'Zaman aşımı (ms, varsayılan 30000, maksimum 120000).'
+        }
+      },
+      required: ['url']
+    },
+    summary: (args) => `Web: ${str(args.url).slice(0, 100)}`,
+    execute: async (args) => {
+      const raw = str(args.url).trim()
+      let parsed: URL
+      try {
+        parsed = new URL(raw)
+      } catch {
+        return { ok: false, content: `Geçersiz URL: ${raw}` }
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { ok: false, content: 'Yalnızca http:// ve https:// desteklenir.' }
+      }
+      const host = parsed.hostname.toLowerCase()
+      if (
+        host === 'localhost' ||
+        host === '::1' ||
+        host.endsWith('.local') ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+      ) {
+        return { ok: false, content: 'Yerel/özel ağ adreslerine erişim engellendi.' }
+      }
+      const timeout = Math.min(120000, Math.max(1000, num(args.timeout_ms, 30_000)))
+      const maxChars = Math.min(200_000, Math.max(1000, num(args.max_chars, 120_000)))
+      try {
+        const response = await fetch(parsed.toString(), {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(timeout),
+          headers: {
+            'User-Agent': 'EVREN-Desktop/webfetch',
+            Accept: 'text/html,text/plain,application/json,application/xml;q=0.9,*/*;q=0.5'
+          }
+        })
+        const body = await response.text()
+        const head = [
+          `URL: ${response.url || parsed.toString()}`,
+          `HTTP: ${response.status} ${response.statusText}`,
+          `Content-Type: ${response.headers.get('content-type') ?? 'bilinmiyor'}`
+        ].join('\n')
+        const content = body.slice(0, maxChars)
+        return {
+          ok: response.ok,
+          content: `${head}\n\n${content}${body.length > maxChars ? '\n\n[çıktı kısaltıldı]' : ''}`
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          content: `Web isteği başarısız: ${error instanceof Error ? error.message : String(error)}`
+        }
+      }
+    }
+  })
+
   if (browser) {
     tools.push({
       name: 'browser_open',

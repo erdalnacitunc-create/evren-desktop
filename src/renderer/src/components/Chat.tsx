@@ -42,6 +42,7 @@ interface UiMessage {
   role: 'user' | 'assistant'
   content: string
   reasoning?: string
+  intermediate?: boolean
 }
 
 type Item =
@@ -362,6 +363,7 @@ export function Chat({
   const [reviewArtifact, setReviewArtifact] = useState<Artifact | null>(null)
   const [showScrollDown, setShowScrollDown] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [showTrace, setShowTrace] = useState(false)
   const [gitOpen, setGitOpen] = useState(false)
   const [workspaceTick, setWorkspaceTick] = useState(0)
   const [tasksOpen, setTasksOpen] = useState(false)
@@ -787,7 +789,7 @@ export function Chat({
   )
 
   const commitDraft = useCallback(
-    (persist: boolean): void => {
+    (persist: boolean, intermediate = false): void => {
       const final = draftRef.current
       if (!final.content.trim() && !final.reasoning.trim()) return
       setItems((prev) => [
@@ -796,7 +798,8 @@ export function Chat({
           kind: 'message',
           role: 'assistant',
           content: final.content,
-          reasoning: final.reasoning || undefined
+          reasoning: final.reasoning || undefined,
+          intermediate
         }
       ])
       if (persist) {
@@ -834,6 +837,7 @@ export function Chat({
     setReviewOpen(false)
     setReviewArtifact(null)
     setWorkspaceOpen(false)
+    setShowTrace(false)
     setTasksOpen(false)
     setGitOpen(false)
     setTodos(initialTodos)
@@ -890,7 +894,7 @@ export function Chat({
         usageRef.current = event.usage
         setUsage(event.usage)
       } else if (event.type === 'tool-call') {
-        commitDraft(false)
+        commitDraft(false, true)
         setItems((prev) => [...prev, { kind: 'tool', call: event.call }])
       } else if (event.type === 'tool-result') {
         setItems((prev) =>
@@ -1581,6 +1585,9 @@ export function Chat({
     }
   }
 
+  const traceItemCount = items.filter(
+    (item) => item.kind === 'tool' || (item.kind === 'message' && item.intermediate)
+  ).length
   const hasConversation = items.length > 0 || draft.content || draft.reasoning
   const showAgentBanner =
     agent.enabled && profile === 'build' && agent.mode === 'auto' && !multiverse.enabled
@@ -1588,7 +1595,9 @@ export function Chat({
   const doneTodos = todos.filter((todo) => todo.status === 'completed').length
   const runningSubagents = subagentTasks.filter((task) => task.status === 'running').length
   const workspaceName = workspacePath
-    ? workspacePath.split(/[\\/]/).filter(Boolean).pop() ?? workspacePath
+    ? workspacePath.includes('evren-workspaces')
+      ? 'Geçici'
+      : workspacePath.split(/[\\/]/).filter(Boolean).pop() ?? workspacePath
     : null
 
   return (
@@ -1638,6 +1647,14 @@ export function Chat({
               title="Terminali aç/kapat (Ctrl+`)"
             >
               Terminal
+            </button>
+            <button
+              className={`btn-ghost ${showTrace ? 'active' : ''}`}
+              onClick={() => setShowTrace((value) => !value)}
+              title="Araç çağrılarını ve ara mesajları göster/gizle"
+              disabled={traceItemCount === 0}
+            >
+              Ara adımlar{traceItemCount > 0 ? ` (${traceItemCount})` : ''}
             </button>
             <button
               className="btn-ghost"
@@ -1773,20 +1790,23 @@ export function Chat({
 
         {mvPhase === 'synthesis' && <div className="mv-synthesis-label">Sentez</div>}
 
-        {items.map((item, index) =>
-          item.kind === 'tool' ? (
-            <div
+        {items.map((item, index) => {
+          const hidden =
+            item.kind === 'tool' || (item.kind === 'message' && item.intermediate)
+          if (!showTrace && hidden) return null
+          return item.kind === 'tool' ? (
+            <details
               key={index}
               className={`tool-card ${
                 item.result ? (item.result.ok ? 'tool-ok' : 'tool-fail') : 'tool-pending'
               } ${item.call.name === 'spawn_agent' ? 'tool-subagent' : ''}`}
             >
-              <div className="tool-head">
+              <summary className="tool-head">
                 <span className="tool-name">{toolLabel(item.call)}</span>
                 <span className="tool-status">
                   {item.result ? (item.result.ok ? 'tamam' : 'hata') : 'çalışıyor...'}
                 </span>
-              </div>
+              </summary>
               <pre className="tool-args">{prettyJson(item.call.arguments)}</pre>
               {item.result && (
                 <pre className="tool-result">
@@ -1807,10 +1827,10 @@ export function Chat({
                   </button>
                 </div>
               )}
-            </div>
+            </details>
           ) : (
             <div key={index} className={`msg msg-${item.role}`}>
-              {item.role === 'assistant' && item.reasoning && (
+              {item.role === 'assistant' && item.reasoning && showTrace && (
                 <details className="reasoning">
                   <summary>Düşünme</summary>
                   <pre>{item.reasoning}</pre>
@@ -1850,11 +1870,11 @@ export function Chat({
               )}
             </div>
           )
-        )}
+        })}
 
-        {(draft.content || draft.reasoning) && (
+        {(draft.content || (showTrace && draft.reasoning)) && (
           <div className="msg msg-assistant">
-            {draft.reasoning && (
+            {draft.reasoning && showTrace && (
               <details className="reasoning">
                 <summary>Düşünüyor...</summary>
                 <pre>{draft.reasoning}</pre>
@@ -1877,7 +1897,7 @@ export function Chat({
           </div>
         )}
 
-        {streaming && !draft.content && !draft.reasoning && (
+        {streaming && !draft.content && (
           <div className="msg msg-assistant">
             <div className="bubble">
               <span className="typing">● ● ●</span>

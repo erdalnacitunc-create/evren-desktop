@@ -22,6 +22,7 @@ import {
   grepWorkspace,
   makeWorkspaceDirectory,
   readWorkspaceFile,
+  readWorkspaceImage,
   runWorkspaceCommand,
   writeWorkspaceFile
 } from '../workspace'
@@ -700,6 +701,7 @@ export function createTools(options: {
       name: 'read_file',
       description:
         'Çalışma alanındaki bir metin dosyasını satır numaralarıyla okur. ' +
+        'PNG/JPEG/GIF/WebP dosyalarını modele görsel olarak iletir. ' +
         'Düzenlemeden önce mutlaka oku. offset 1 tabanlı satırdır; limit satır sayısıdır.',
       parameters: {
         type: 'object',
@@ -712,9 +714,18 @@ export function createTools(options: {
       },
       summary: (args) => `Dosya oku: ${str(args.path)}`,
       execute: async (args) => {
+        const requestedPath = str(args.path)
+        if (/\.(png|jpe?g|gif|webp)$/i.test(requestedPath)) {
+          const image = await readWorkspaceImage(requestedPath)
+          return {
+            ok: true,
+            content: `${image.path} (${image.size} bayt, ${image.mime}) görsel olarak eklendi.`,
+            imageDataUrl: image.dataUrl
+          }
+        }
         const offset = Math.max(1, Math.round(num(args.offset, 1)))
         const limit = Math.max(1, Math.min(4000, Math.round(num(args.limit, 800))))
-        const file = await readWorkspaceFile(str(args.path), offset, limit)
+        const file = await readWorkspaceFile(requestedPath, offset, limit)
         if (file.binary) {
           return { ok: true, content: `${file.path}: ${file.content} (${file.size} bayt)` }
         }

@@ -7,6 +7,7 @@ import { randomUUID } from 'crypto'
 import {
   basename,
   dirname,
+  extname,
   isAbsolute,
   join,
   relative,
@@ -351,6 +352,35 @@ export async function readWorkspaceFile(
     size: actualSize,
     truncated,
     binary
+  }
+}
+
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const IMAGE_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp'
+}
+
+export async function readWorkspaceImage(
+  rawPath: string
+): Promise<{ path: string; size: number; mime: string; dataUrl: string }> {
+  const root = await requireRoot()
+  const abs = resolveInside(root, rawPath)
+  await ensureRealInside(root, abs)
+  const stat = await fs.stat(abs)
+  if (!stat.isFile()) throw new Error('Yol bir dosya değil.')
+  if (stat.size > MAX_IMAGE_BYTES) throw new Error('Görsel çok büyük (10 MB sınırı).')
+  const mime = IMAGE_MIME[extname(abs).toLowerCase()]
+  if (!mime) throw new Error('Desteklenmeyen görsel türü (PNG/JPEG/GIF/WebP).')
+  const buffer = await fs.readFile(abs)
+  return {
+    path: toRel(root, abs),
+    size: stat.size,
+    mime,
+    dataUrl: `data:${mime};base64,${buffer.toString('base64')}`
   }
 }
 

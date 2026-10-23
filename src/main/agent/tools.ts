@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import * as vm from 'vm'
 import { toolCategory } from '../../shared/permissions'
 import type { ChatEvent, PermissionCategory, TodoItem } from '../../shared/types'
 import { callMcpTool, listServerTools, type AgentMcpTool } from '../mcp/manager'
@@ -1355,6 +1356,97 @@ export function createTools(options: {
       }
     })
   }
+
+  tools.push({
+    name: 'execute',
+    category: 'read',
+    description:
+      'Code Mode (güvenli alt küme): read-only araçları JavaScript ile toplu çağırır. ' +
+      'Sandbox içinde `tools.read_file({path})`, `tools.glob({pattern})`, `tools.webfetch({url})` ' +
+      'gibi çağrılar yapılabilir; yazma ve shell araçları kullanılamaz.',
+    parameters: {
+      type: 'object',
+      properties: {
+        script: {
+          type: 'string',
+          description:
+            'Async IIFE gövdesi. Örnek: `const a = await tools.read_file({path:"README.md"}); return a.content;`'
+        }
+      },
+      required: ['script']
+    },
+    summary: () => 'Code Mode (read-only)',
+    execute: async (args, ctx) => {
+      const script = str(args.script)
+      if (!script.trim()) return { ok: false, content: 'Script boş.' }
+      const allowed = new Set([
+        'read_file',
+        'list_files',
+        'glob',
+        'grep',
+        'repo_map',
+        'code_search',
+        'webfetch',
+        'websearch',
+        'browser_snapshot',
+        'browser_console',
+        'browser_network',
+        'browser_html',
+        'browser_performance'
+      ])
+      const logs: string[] = []
+      const api = Object.fromEntries(
+        [...allowed].map((name) => [
+          name,
+          async (toolArgs: Record<string, unknown> = {}) => {
+            const tool = tools.find((item) => item.name === name)
+            if (!tool) throw new Error(`Araç bulunamadı: ${name}`)
+            return await tool.execute(toolArgs, {
+              ...ctx,
+              send: ctx.send
+            })
+          }
+        ])
+      )
+      const sandbox = {
+        tools: api,
+        console: {
+          log: (...values: unknown[]) =>
+            logs.push(values.map((value) => String(value)).join(' ').slice(0, 500))
+        },
+        JSON,
+        Math,
+        Date,
+        Array,
+        Object,
+        String,
+        Number,
+        Boolean
+      }
+      try {
+        const context = vm.createContext(sandbox)
+        const wrapped = `(async () => {\n${script}\n})()`
+        const execution = vm.runInContext(wrapped, context, { timeout: 30_000 })
+        const result = await Promise.race([
+          execution,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Code Mode zaman aşımı (30s).')), 30_000)
+          )
+        ])
+        const content =
+          typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+        const output = [logs.join('\n'), String(content ?? 'undefined')]
+          .filter(Boolean)
+          .join('\n')
+        return { ok: true, content: output.slice(0, 60_000) }
+      } catch (error) {
+        return {
+          ok: false,
+          content: `Code Mode hatası: ${error instanceof Error ? error.message : String(error)}`
+        }
+      }
+    }
+  })
 
   tools.push({
     name: 'session',

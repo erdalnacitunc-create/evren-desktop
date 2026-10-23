@@ -1723,6 +1723,94 @@ export function createTools(options: {
         imageDataUrl: await browser.screenshot()
       })
     })
+
+    tools.push({
+      name: 'browser_console',
+      description: 'Tarayıcı konsol mesajlarını ve sayfa hatalarını döndürür.',
+      parameters: {
+        type: 'object',
+        properties: {
+          level: {
+            type: 'string',
+            description: 'Filtre: error, warning, log, info veya pageerror.'
+          },
+          limit: { type: 'number', description: 'Maksimum kayıt (varsayılan 100).' }
+        }
+      },
+      summary: () => 'Tarayıcı konsolu',
+      execute: async (args) => ({
+        ok: true,
+        content: await browser.console(
+          str(args.level) || undefined,
+          num(args.limit, 100)
+        )
+      })
+    })
+
+    tools.push({
+      name: 'browser_network',
+      description:
+        'Tarayıcıdaki HTTP isteklerini, durum kodlarını ve başarısız istekleri döndürür.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filter: { type: 'string', description: 'URL içinde aranacak metin.' },
+          limit: { type: 'number', description: 'Maksimum kayıt (varsayılan 100).' }
+        }
+      },
+      summary: (args) => `Tarayıcı ağı: ${str(args.filter).slice(0, 60)}`,
+      execute: async (args) => ({
+        ok: true,
+        content: await browser.network(str(args.filter) || undefined, num(args.limit, 100))
+      })
+    })
+
+    tools.push({
+      name: 'browser_eval',
+      description:
+        'Tarayıcı sayfasında JavaScript çalıştırır ve JSON-serileştirilebilir sonucu döndürür.',
+      parameters: {
+        type: 'object',
+        properties: {
+          script: { type: 'string', description: 'Sayfa bağlamında çalıştırılacak JS ifadesi.' }
+        },
+        required: ['script']
+      },
+      summary: () => 'Tarayıcıda JavaScript çalıştır',
+      execute: async (args) => ({
+        ok: true,
+        content: await browser.evaluate(str(args.script))
+      })
+    })
+
+    tools.push({
+      name: 'browser_html',
+      description:
+        'Sayfanın HTML içeriğini veya verilen CSS selectorünün innerHTML değerini döndürür.',
+      parameters: {
+        type: 'object',
+        properties: {
+          selector: { type: 'string', description: 'İsteğe bağlı CSS selector.' }
+        }
+      },
+      summary: (args) => `Tarayıcı HTML: ${str(args.selector).slice(0, 60)}`,
+      execute: async (args) => ({
+        ok: true,
+        content: await browser.html(str(args.selector) || undefined)
+      })
+    })
+
+    tools.push({
+      name: 'browser_performance',
+      description:
+        'Sayfa yükleme zamanlamalarını ve son kaynakların süre/boyut özetini döndürür.',
+      parameters: { type: 'object', properties: {} },
+      summary: () => 'Tarayıcı performansı',
+      execute: async () => ({
+        ok: true,
+        content: await browser.performance()
+      })
+    })
   }
 
   if (options.computer) {

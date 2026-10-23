@@ -17,6 +17,7 @@ import {
 import { promisify } from 'util'
 import { getSettings, updateSettings } from './settings'
 import { withAndroidPath } from './android'
+import { extractPdfText } from './pdf'
 import type {
   WorkspaceChange,
   WorkspaceCheckpoint,
@@ -381,6 +382,23 @@ export async function readWorkspaceImage(
     size: stat.size,
     mime,
     dataUrl: `data:${mime};base64,${buffer.toString('base64')}`
+  }
+}
+
+export async function readWorkspacePdf(
+  rawPath: string
+): Promise<{ path: string; size: number; text: string }> {
+  const root = await requireRoot()
+  const abs = resolveInside(root, rawPath)
+  await ensureRealInside(root, abs)
+  const stat = await fs.stat(abs)
+  if (!stat.isFile()) throw new Error('Yol bir dosya değil.')
+  if (extname(abs).toLowerCase() !== '.pdf') throw new Error('Dosya PDF değil.')
+  const buffer = await fs.readFile(abs)
+  return {
+    path: toRel(root, abs),
+    size: stat.size,
+    text: await extractPdfText(buffer)
   }
 }
 

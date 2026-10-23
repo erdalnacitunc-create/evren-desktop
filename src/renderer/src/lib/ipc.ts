@@ -52,6 +52,8 @@ export const api = {
   app: {
     openExternal: (url: string): Promise<Result<boolean>> => window.evren.app.openExternal(url),
     openPath: (path: string): Promise<Result<true>> => window.evren.app.openPath(path),
+    chooseDirectory: (title?: string): Promise<Result<string | null>> =>
+      window.evren.app.chooseDirectory(title),
     notify: (title: string, body: string): Promise<Result<boolean>> =>
       window.evren.app.notify(title, body)
   },

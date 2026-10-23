@@ -6,6 +6,7 @@ import { GithubAccountPanel } from './GithubAccountPanel'
 import { HeadlessPanel } from './HeadlessPanel'
 import { McpBrowser } from './McpBrowser'
 import { MemoryPanel } from './MemoryPanel'
+import { ReferencesPanel } from './ReferencesPanel'
 import { ScheduledTasksPanel } from './ScheduledTasksPanel'
 import { UpdatePanel } from './UpdatePanel'
 
@@ -13,7 +14,15 @@ interface Props {
   settings: AppSettings
   keyStatus: KeyStatus | null
   models: ModelInfo[]
-  initialTab?: 'general' | 'extensions' | 'memory' | 'github' | 'scheduled' | 'mcp' | 'api'
+  initialTab?:
+    | 'general'
+    | 'extensions'
+    | 'memory'
+    | 'references'
+    | 'github'
+    | 'scheduled'
+    | 'mcp'
+    | 'api'
   onClose: () => void
   onSaved: (settings: AppSettings) => void
   onReload: () => void
@@ -36,7 +45,14 @@ export function SettingsModal({
   const [error, setError] = useState<string | null>(null)
   const [okMessage, setOkMessage] = useState<string | null>(null)
   const [tab, setTab] = useState<
-    'general' | 'extensions' | 'memory' | 'github' | 'scheduled' | 'mcp' | 'api'
+    | 'general'
+    | 'extensions'
+    | 'memory'
+    | 'references'
+    | 'github'
+    | 'scheduled'
+    | 'mcp'
+    | 'api'
   >(initialTab ?? 'general')
 
   async function saveBaseUrl(): Promise<void> {
@@ -160,6 +176,12 @@ export function SettingsModal({
             Hafıza
           </button>
           <button
+            className={tab === 'references' ? 'active' : ''}
+            onClick={() => setTab('references')}
+          >
+            Referanslar
+          </button>
+          <button
             className={tab === 'github' ? 'active' : ''}
             onClick={() => setTab('github')}
           >
@@ -184,6 +206,8 @@ export function SettingsModal({
             <ExtensionsPanel />
           ) : tab === 'memory' ? (
             <MemoryPanel settings={settings} models={models} onSaved={onSaved} />
+          ) : tab === 'references' ? (
+            <ReferencesPanel settings={settings} onSaved={onSaved} />
           ) : tab === 'github' ? (
             <GithubAccountPanel settings={settings} onSaved={onSaved} />
           ) : tab === 'scheduled' ? (

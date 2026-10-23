@@ -1300,6 +1300,24 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle(
+    'app:chooseDirectory',
+    async (_event, title?: string): Promise<Result<string | null>> => {
+      try {
+        const result = await dialog.showOpenDialog({
+          title: String(title ?? 'Klasör seç'),
+          properties: ['openDirectory', 'createDirectory']
+        })
+        return {
+          ok: true,
+          data: result.canceled || !result.filePaths[0] ? null : result.filePaths[0]
+        }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
   ipcMain.handle('workspace:choose', async (): Promise<Result<WorkspaceInfo>> => {
     try {
       const result = await dialog.showOpenDialog({

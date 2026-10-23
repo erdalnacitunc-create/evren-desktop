@@ -1,7 +1,8 @@
 import { promises as fs } from 'fs'
-import { isAbsolute, relative, resolve, sep } from 'path'
+import { extname, isAbsolute, relative, resolve, sep } from 'path'
 import type { ReferenceDirectory } from '../shared/types'
 import { getSettings } from './settings'
+import { extractPdfText } from './pdf'
 
 const MAX_READ_BYTES = 512 * 1024
 
@@ -125,6 +126,21 @@ export async function readReference(
     size: stat.size,
     binary: false,
     truncated: stat.size > slice.length || startLine - 1 + maxLines < lines.length
+  }
+}
+
+export async function readReferencePdf(
+  input: string
+): Promise<{ path: string; size: number; text: string }> {
+  const resolved = await resolveReference(input)
+  const stat = await fs.stat(resolved.path)
+  if (!stat.isFile()) throw new Error('Referans yolu bir dosya değil.')
+  if (extname(resolved.path).toLowerCase() !== '.pdf') throw new Error('Dosya PDF değil.')
+  const buffer = await fs.readFile(resolved.path)
+  return {
+    path: resolved.path,
+    size: stat.size,
+    text: await extractPdfText(buffer)
   }
 }
 

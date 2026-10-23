@@ -1246,6 +1246,34 @@ input {
   font-size: 12.5px;
 }
 
+.reference-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.reference-row {
+  display: grid;
+  grid-template-columns: 150px minmax(220px, 1fr) auto auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.reference-row .field {
+  margin-bottom: 0;
+}
+
+.reference-row .btn-ghost {
+  margin-bottom: 2px;
+}
+
+@media (max-width: 760px) {
+  .reference-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .inline-actions {
   display: flex;
   justify-content: flex-end;

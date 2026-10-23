@@ -24,6 +24,7 @@ import {
   makeWorkspaceDirectory,
   readWorkspaceFile,
   readWorkspaceImage,
+  readWorkspacePdf,
   runWorkspaceCommand,
   writeWorkspaceFile
 } from '../workspace'
@@ -35,7 +36,8 @@ import { listSessions, renameSession, searchSessions } from '../sessionStore'
 import {
   listReferenceDirectory,
   listReferences,
-  readReference
+  readReference,
+  readReferencePdf
 } from '../references'
 import {
   addGitWorktree,
@@ -760,6 +762,13 @@ export function createTools(options: {
       summary: (args) => `Dosya oku: ${str(args.path)}`,
       execute: async (args) => {
         const requestedPath = str(args.path)
+        if (/\.pdf$/i.test(requestedPath)) {
+          const pdf = await readWorkspacePdf(requestedPath)
+          return {
+            ok: true,
+            content: `${pdf.path} (${pdf.size} bayt)\n\n${pdf.text || '(PDF metni boş veya taranmış görsel)'}`
+          }
+        }
         if (/\.(png|jpe?g|gif|webp)$/i.test(requestedPath)) {
           const image = await readWorkspaceImage(requestedPath)
           return {
@@ -1494,6 +1503,13 @@ export function createTools(options: {
       if (action === 'read') {
         const path = str(args.path)
         if (!path) return { ok: false, content: 'read için path gerekli.' }
+        if (/\.pdf$/i.test(path)) {
+          const pdf = await readReferencePdf(path)
+          return {
+            ok: true,
+            content: `${pdf.path} (${pdf.size} bayt)\n\n${pdf.text || '(PDF metni boş veya taranmış görsel)'}`
+          }
+        }
         const file = await readReference(path, num(args.offset, 1), num(args.limit, 800))
         return {
           ok: true,

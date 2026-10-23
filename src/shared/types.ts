@@ -397,6 +397,8 @@ export interface Session {
   createdAt: number
   updatedAt: number
   messages: StoredMessage[]
+  workspacePath?: string | null
+  workspaceTemporary?: boolean
   todos?: TodoItem[]
   summary?: string
   summaryMessageCount?: number

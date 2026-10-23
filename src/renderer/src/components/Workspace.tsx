@@ -98,6 +98,12 @@ export function Workspace({
   const [now, setNow] = useState(Date.now())
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paramsOpen, setParamsOpen] = useState(false)
+  const [closePrompt, setClosePrompt] = useState<{
+    sessionId: string
+    title: string
+    workspacePath: string
+  } | null>(null)
+  const [closeNotice, setCloseNotice] = useState<string | null>(null)
   const [settingsTab, setSettingsTab] = useState<
     'general' | 'extensions' | 'memory' | 'github' | 'scheduled' | 'mcp' | 'api'
   >('general')
@@ -170,11 +176,22 @@ export function Workspace({
 
   const openSession = useCallback(async (id: string): Promise<void> => {
     const result = await api.sessions.get(id)
-    if (result.ok && result.data) {
-      setActiveId(id)
-      setActiveSession(result.data)
+    if (!result.ok || !result.data) return
+    let session = result.data
+    if (!session.workspacePath) {
+      const temp = await api.workspace.createTemp()
+      if (temp.ok) {
+        const linked = await api.sessions.setWorkspace(id, temp.data.path, true)
+        if (linked.ok && linked.data) session = linked.data
+      }
+    } else {
+      await api.sessions.activateWorkspace(id)
     }
-  }, [])
+    setActiveId(id)
+    setActiveSession(session)
+    const config = await api.settings.get()
+    if (config.ok) onSettingsChange(config.data)
+  }, [onSettingsChange])
 
   const refreshList = useCallback(async (search: string): Promise<SessionSummary[] | null> => {
     const result = search.trim()
@@ -196,12 +213,20 @@ export function Workspace({
       if (list.length === 0) {
         const created = await api.sessions.create(defaultModelId)
         if (!created.ok) return
+        let session = created.data
+        const temp = await api.workspace.createTemp()
+        if (temp.ok) {
+          const linked = await api.sessions.setWorkspace(session.id, temp.data.path, true)
+          if (linked.ok && linked.data) session = linked.data
+        }
         const again = await api.sessions.list()
         if (again.ok) list = again.data
         if (cancelled) return
         setSessions(list)
-        setActiveId(created.data.id)
-        setActiveSession(created.data)
+        setActiveId(session.id)
+        setActiveSession(session)
+        const config = await api.settings.get()
+        if (config.ok) onSettingsChange(config.data)
         return
       }
 
@@ -209,17 +234,13 @@ export function Workspace({
       setSessions(list)
       const target = list[0]
       if (target) {
-        const session = await api.sessions.get(target.id)
-        if (!cancelled && session.ok && session.data) {
-          setActiveId(target.id)
-          setActiveSession(session.data)
-        }
+        await openSession(target.id)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [defaultModelId])
+  }, [defaultModelId, onSettingsChange, openSession])
 
   // Arama (kisa debounce)
   useEffect(() => {
@@ -233,10 +254,18 @@ export function Workspace({
     const modelId = activeSession?.modelId ?? defaultModelId
     const created = await api.sessions.create(modelId)
     if (!created.ok) return
-    setActiveId(created.data.id)
-    setActiveSession(created.data)
+    let session = created.data
+    const temp = await api.workspace.createTemp()
+    if (temp.ok) {
+      const linked = await api.sessions.setWorkspace(session.id, temp.data.path, true)
+      if (linked.ok && linked.data) session = linked.data
+    }
+    setActiveId(session.id)
+    setActiveSession(session)
+    const config = await api.settings.get()
+    if (config.ok) onSettingsChange(config.data)
     await refreshList(query)
-  }, [activeSession, defaultModelId, query, refreshList])
+  }, [activeSession, defaultModelId, onSettingsChange, query, refreshList])
 
   const selectModel = useCallback(
     async (modelId: string): Promise<void> => {
@@ -300,8 +329,23 @@ export function Workspace({
     })
   }, [])
 
-  const removeSession = useCallback(
-    async (id: string): Promise<void> => {
+  const performCloseSession = useCallback(
+    async (
+      id: string,
+      action: 'save' | 'delete'
+    ): Promise<void> => {
+      const current = await api.sessions.get(id)
+      const workspacePath = current.ok ? current.data?.workspacePath ?? null : null
+      const temporary = current.ok ? current.data?.workspaceTemporary === true : false
+
+      if (temporary && workspacePath) {
+        if (action === 'delete') {
+          await api.workspace.deleteTemp(workspacePath)
+        } else {
+          setCloseNotice(`Geçici klasör korundu: ${workspacePath}`)
+        }
+      }
+
       await api.sessions.delete(id)
       const list = await refreshList(query)
       if (activeIdRef.current !== id) return
@@ -311,14 +355,39 @@ export function Workspace({
         await openSession(next.id)
       } else {
         const created = await api.sessions.create(defaultModelId)
-        if (created.ok) {
-          setActiveId(created.data.id)
-          setActiveSession(created.data)
-          await refreshList(query)
+        if (!created.ok) return
+        let session = created.data
+        const temp = await api.workspace.createTemp()
+        if (temp.ok) {
+          const linked = await api.sessions.setWorkspace(session.id, temp.data.path, true)
+          if (linked.ok && linked.data) session = linked.data
         }
+        setActiveId(session.id)
+        setActiveSession(session)
+        const config = await api.settings.get()
+        if (config.ok) onSettingsChange(config.data)
+        await refreshList(query)
       }
     },
-    [defaultModelId, openSession, query, refreshList]
+    [defaultModelId, onSettingsChange, openSession, query, refreshList]
+  )
+
+  const removeSession = useCallback(
+    async (id: string): Promise<void> => {
+      const current = await api.sessions.get(id)
+      const workspacePath = current.ok ? current.data?.workspacePath ?? null : null
+      const temporary = current.ok ? current.data?.workspaceTemporary === true : false
+      if (temporary && workspacePath) {
+        setClosePrompt({
+          sessionId: id,
+          title: (current.ok ? current.data?.title : null) ?? 'Bu sohbet',
+          workspacePath
+        })
+        return
+      }
+      await performCloseSession(id, 'delete')
+    },
+    [performCloseSession]
   )
 
   const updateSettingsPatch = useCallback(
@@ -331,21 +400,36 @@ export function Workspace({
 
   const chooseWorkspace = useCallback(async (): Promise<void> => {
     const result = await api.workspace.choose()
-    if (!result.ok) return
+    if (!result.ok || !result.data.path) return
+    const id = activeIdRef.current
+    if (id) {
+      const linked = await api.sessions.setWorkspace(id, result.data.path, false)
+      if (linked.ok && linked.data) setActiveSession(linked.data)
+    }
     const config = await api.settings.get()
     if (config.ok) onSettingsChange(config.data)
   }, [onSettingsChange])
 
   const createTempWorkspace = useCallback(async (): Promise<void> => {
     const result = await api.workspace.createTemp()
-    if (!result.ok) return
+    if (!result.ok || !result.data.path) return
+    const id = activeIdRef.current
+    if (id) {
+      const linked = await api.sessions.setWorkspace(id, result.data.path, true)
+      if (linked.ok && linked.data) setActiveSession(linked.data)
+    }
     const config = await api.settings.get()
     if (config.ok) onSettingsChange(config.data)
   }, [onSettingsChange])
 
   const clearWorkspace = useCallback(async (): Promise<void> => {
+    const id = activeIdRef.current
     const result = await api.workspace.clear()
     if (!result.ok) return
+    if (id) {
+      const linked = await api.sessions.setWorkspace(id, null, false)
+      if (linked.ok && linked.data) setActiveSession(linked.data)
+    }
     const config = await api.settings.get()
     if (config.ok) onSettingsChange(config.data)
   }, [onSettingsChange])
@@ -957,6 +1041,67 @@ export function Workspace({
           onSaved={onSettingsChange}
           onReload={onRefresh}
         />
+      )}
+
+      {closePrompt && (
+        <div className="modal-overlay" onClick={() => setClosePrompt(null)}>
+          <div
+            className="modal close-session-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sohbeti kapat"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <h2>Sohbeti kapat</h2>
+              <button className="btn-ghost" onClick={() => setClosePrompt(null)}>
+                Kapat
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>
+                <strong>{closePrompt.title}</strong> sohbetinin geçici çalışma
+                klasörü var:
+              </p>
+              <code className="close-session-path">{closePrompt.workspacePath}</code>
+              <p className="muted">
+                Klasörü silersen içindeki dosyalar geri alınamaz. Klasörü
+                kaydet seçeneği klasörü diskte bırakır.
+              </p>
+              <div className="inline-actions">
+                <button className="btn-ghost" onClick={() => setClosePrompt(null)}>
+                  İptal
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    const pending = closePrompt
+                    setClosePrompt(null)
+                    void performCloseSession(pending.sessionId, 'save')
+                  }}
+                >
+                  Klasörü kaydet
+                </button>
+                <button
+                  className="btn-ghost danger"
+                  onClick={() => {
+                    const pending = closePrompt
+                    setClosePrompt(null)
+                    void performCloseSession(pending.sessionId, 'delete')
+                  }}
+                >
+                  Klasörü sil
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {closeNotice && (
+        <div className="chat-notice" onClick={() => setCloseNotice(null)}>
+          {closeNotice}
+        </div>
       )}
 
       <GlobalCommandPalette

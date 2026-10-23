@@ -203,6 +203,28 @@ export async function createTemporaryWorkspace(): Promise<WorkspaceInfo> {
   return { path: dir, exists: true, temporary: true }
 }
 
+export async function setActiveWorkspacePath(
+  path: string | null
+): Promise<void> {
+  await updateSettings({ workspacePath: path })
+}
+
+export async function deleteTemporaryWorkspace(path: string): Promise<boolean> {
+  if (!isTemporaryWorkspacePath(path)) return false
+  const target = resolve(path)
+  try {
+    await fs.access(join(target, TEMP_WORKSPACE_MARKER))
+    await fs.rm(target, { recursive: true, force: true })
+    const settings = await getSettings()
+    if (settings.workspacePath && resolve(settings.workspacePath) === target) {
+      await updateSettings({ workspacePath: null })
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function getWorkspaceInfo(): Promise<WorkspaceInfo> {
   const settings = await getSettings()
   const root = await getWorkspaceRoot()

@@ -128,6 +128,10 @@ export const api = {
     delete: (sessionId: string) => ipcRenderer.invoke('sessions:delete', sessionId),
     setModel: (sessionId: string, modelId: string) =>
       ipcRenderer.invoke('sessions:setModel', sessionId, modelId),
+    setWorkspace: (sessionId: string, path: string | null, temporary: boolean) =>
+      ipcRenderer.invoke('sessions:setWorkspace', sessionId, path, temporary),
+    activateWorkspace: (sessionId: string) =>
+      ipcRenderer.invoke('sessions:activateWorkspace', sessionId),
     setTodos: (sessionId: string, todos: unknown) =>
       ipcRenderer.invoke('sessions:setTodos', sessionId, todos)
   },
@@ -232,6 +236,7 @@ export const api = {
     get: () => ipcRenderer.invoke('workspace:get'),
     choose: () => ipcRenderer.invoke('workspace:choose'),
     createTemp: () => ipcRenderer.invoke('workspace:createTemp'),
+    deleteTemp: (path: string) => ipcRenderer.invoke('workspace:deleteTemp', path),
     set: (path: string) => ipcRenderer.invoke('workspace:set', path),
     clear: () => ipcRenderer.invoke('workspace:clear'),
     tree: () => ipcRenderer.invoke('workspace:tree'),

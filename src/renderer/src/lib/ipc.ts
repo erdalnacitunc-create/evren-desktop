@@ -187,6 +187,14 @@ export const api = {
     delete: (sessionId: string): Promise<Result<boolean>> => window.evren.sessions.delete(sessionId),
     setModel: (sessionId: string, modelId: string): Promise<Result<Session | null>> =>
       window.evren.sessions.setModel(sessionId, modelId),
+    setWorkspace: (
+      sessionId: string,
+      path: string | null,
+      temporary: boolean
+    ): Promise<Result<Session | null>> =>
+      window.evren.sessions.setWorkspace(sessionId, path, temporary),
+    activateWorkspace: (sessionId: string): Promise<Result<Session | null>> =>
+      window.evren.sessions.activateWorkspace(sessionId),
     setTodos: (sessionId: string, todos: import('@shared/types').TodoItem[]): Promise<Result<Session | null>> =>
       window.evren.sessions.setTodos(sessionId, todos)
   },
@@ -332,6 +340,7 @@ export const api = {
     get: (): Promise<Result<WorkspaceInfo>> => window.evren.workspace.get(),
     choose: (): Promise<Result<WorkspaceInfo>> => window.evren.workspace.choose(),
     createTemp: (): Promise<Result<WorkspaceInfo>> => window.evren.workspace.createTemp(),
+    deleteTemp: (path: string): Promise<Result<boolean>> => window.evren.workspace.deleteTemp(path),
     set: (path: string): Promise<Result<WorkspaceInfo>> => window.evren.workspace.set(path),
     clear: (): Promise<Result<WorkspaceInfo>> => window.evren.workspace.clear(),
     tree: (): Promise<Result<WorkspaceEntry[]>> => window.evren.workspace.tree(),

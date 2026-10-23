@@ -128,12 +128,14 @@ import {
 import {
   clearWorkspacePath,
   createTemporaryWorkspace,
+  deleteTemporaryWorkspace,
   getWorkspaceInfo,
   getWorkspaceTree,
   listWorkspaceChanges,
   listWorkspaceCheckpoints,
   readWorkspaceFile,
   restoreWorkspaceCheckpoint,
+  setActiveWorkspacePath,
   setWorkspacePath,
   undoWorkspaceChange
 } from './workspace'
@@ -143,6 +145,7 @@ import {
   deleteSession,
   getSession,
   listSessions,
+  patchSession,
   renameSession,
   searchSessions,
   setSessionModel,
@@ -477,6 +480,52 @@ export function registerIpcHandlers(): void {
       return fail(error)
     }
   })
+
+  ipcMain.handle(
+    'sessions:setWorkspace',
+    async (
+      _event,
+      sessionId: string,
+      path: string | null,
+      temporary: boolean
+    ): Promise<Result<Session | null>> => {
+      try {
+        const session = await patchSession(String(sessionId ?? ''), {
+          workspacePath: path,
+          workspaceTemporary: temporary
+        })
+        await setActiveWorkspacePath(path)
+        return { ok: true, data: session }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'sessions:activateWorkspace',
+    async (_event, sessionId: string): Promise<Result<Session | null>> => {
+      try {
+        const session = await getSession(String(sessionId ?? ''))
+        if (!session) return { ok: true, data: null }
+        await setActiveWorkspacePath(session.workspacePath ?? null)
+        return { ok: true, data: session }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'workspace:deleteTemp',
+    async (_event, path: string): Promise<Result<boolean>> => {
+      try {
+        return { ok: true, data: await deleteTemporaryWorkspace(String(path ?? '')) }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
 
   ipcMain.handle(
     'sessions:setModel',

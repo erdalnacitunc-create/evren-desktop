@@ -1085,9 +1085,17 @@ export async function runWorkspaceCommand(
   )
   const isWindows = process.platform === 'win32'
   const file = isWindows ? 'powershell.exe' : '/bin/sh'
+  // Windows PowerShell varsayılan olarak OEM kod sayfasında (TR için cp857)
+  // yazar; bu da Türkçe karakterlerin bozulmasına yol açar. UTF-8'e zorluyoruz.
+  const utf8Prefix = isWindows
+    ? `$ProgressPreference='SilentlyContinue';` +
+      `[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);` +
+      `$OutputEncoding=[System.Text.UTF8Encoding]::new($false);`
+    : `export LC_ALL=C.UTF-8 LANG=C.UTF-8 2>/dev/null; `
+  const effectiveCommand = `${utf8Prefix}${command}`
   const args = isWindows
-    ? ['-NoProfile', '-NonInteractive', '-Command', command]
-    : ['-c', command]
+    ? ['-NoProfile', '-NonInteractive', '-Command', effectiveCommand]
+    : ['-c', effectiveCommand]
   const env = await withAndroidPath()
 
   if (options.background) {

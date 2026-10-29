@@ -13,12 +13,14 @@ import {
 } from '../mcp/manager'
 import { callPluginTool, listPluginTools, type AgentPluginTool } from '../plugins/manager'
 import { BrowserSession } from './browser'
+import { queryUsbInventory, runPythonScript } from './hardware'
 import { waitForQuestion } from './question'
 import { captureScreen, runComputerCommand, toSendKeys } from './computer'
 import {
   deleteWorkspaceFile,
   editWorkspaceFile,
   getWorkspaceTree,
+  getWorkspaceRoot,
   globWorkspace,
   grepWorkspace,
   makeWorkspaceDirectory,
@@ -1809,6 +1811,129 @@ export function createTools(options: {
   })
 
   tools.push({
+    name: 'usb_devices',
+    category: 'read',
+    description:
+      'Bilgisayara bağlı USB aygıtlarını, seri portları (COM/ttyUSB/ttyACM), USB diskleri ve ' +
+      'ADB cihazlarını yapılandırılmış olarak listeler. Python/pyserial/esptool varlığını da bildirir. ' +
+      'USB/seri port/donanım incelemesinde ilk bunu kullan.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filter: {
+          type: 'string',
+          description: 'Aygıt adı, VID/PID veya instance ID içinde aranacak metin.'
+        }
+      }
+    },
+    summary: (args) => `USB aygıtları${str(args.filter) ? `: ${str(args.filter)}` : ''}`,
+    execute: async (args) => {
+      const inventory = await queryUsbInventory()
+      const needle = str(args.filter).trim().toLowerCase()
+      const matches = (value: string | undefined): boolean =>
+        !needle || String(value ?? '').toLowerCase().includes(needle)
+
+      const devices = inventory.devices.filter(
+        (item) =>
+          matches(item.name) ||
+          matches(item.instanceId) ||
+          matches(item.vendorId) ||
+          matches(item.productId)
+      )
+      const ports = inventory.serialPorts.filter(
+        (item) => matches(item.device) || matches(item.description)
+      )
+      const disks = inventory.usbDisks.filter((item) => matches(item.model))
+
+      const lines: string[] = []
+      lines.push(
+        `USB aygıtları: ${devices.length}/${inventory.devices.length}` +
+          (needle ? ` (filtre: ${needle})` : '')
+      )
+      for (const item of devices.slice(0, 60)) {
+        const vidPid = item.vendorId ? ` VID_${item.vendorId}&PID_${item.productId ?? '?'}` : ''
+        lines.push(`- ${item.name} [${item.status}]${vidPid}`)
+        lines.push(`  ${item.instanceId}`)
+      }
+      if (devices.length === 0) lines.push('- (eşleşen USB aygıtı yok)')
+
+      lines.push('', `Seri portlar: ${ports.length}`)
+      for (const port of ports) {
+        lines.push(`- ${port.device} — ${port.description}`)
+      }
+      if (ports.length === 0) lines.push('- (seri port yok)')
+
+      lines.push('', `USB diskler: ${disks.length}`)
+      for (const disk of disks) {
+        lines.push(`- ${disk.model}${disk.serial ? ` (seri: ${disk.serial})` : ''}`)
+      }
+      if (disks.length === 0) lines.push('- (USB disk yok)')
+
+      lines.push(
+        '',
+        `ADB: ${inventory.adbAvailable ? 'var' : 'yok'}, cihaz: ${inventory.adbDevices.length}`
+      )
+      for (const device of inventory.adbDevices) lines.push(`- ${device}`)
+
+      lines.push(
+        '',
+        `Python: ${inventory.python.available ? inventory.python.version : 'yok'}` +
+          `${inventory.python.pyserial ? `, pyserial ${inventory.python.pyserial}` : ''}` +
+          `${inventory.python.esptool ? `, esptool ${inventory.python.esptool}` : ''}`
+      )
+
+      return { ok: true, content: lines.join('\n') }
+    }
+  })
+
+  tools.push({
+    name: 'run_python',
+    category: 'execute',
+    description:
+      'Python kodunu geçici bir .py dosyasına yazıp çalıştırır. Tırnak/kaçış sorunu olmadan ' +
+      'pyserial, esptool, USB/HID veya dosya işlemleri için kullan. Çok satırlı kod destekler.',
+    parameters: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Çalıştırılacak Python kodu.' },
+        args: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Scripte geçilecek komut satırı argümanları.'
+        },
+        timeout_ms: { type: 'number', description: 'Zaman aşımı (ms, varsayılan 120000).' }
+      },
+      required: ['code']
+    },
+    summary: (args) => `Python: ${str(args.code).split('\n')[0].slice(0, 80)}`,
+    execute: async (args, ctx) => {
+      const code = str(args.code)
+      if (!code.trim()) return { ok: false, content: 'Python kodu boş.' }
+      const scriptArgs = Array.isArray(args.args)
+        ? args.args.map((value) => String(value))
+        : []
+      const workspaceRoot = await getWorkspaceRoot()
+      const result = await runPythonScript(code, {
+        args: scriptArgs,
+        cwd: workspaceRoot ?? undefined,
+        timeoutMs: num(args.timeout_ms, 120_000)
+      })
+      const parts = [
+        `Python çıkış kodu: ${result.exitCode} (${result.durationMs} ms)`,
+        '--- stdout ---',
+        result.stdout.trim() || '(boş)',
+        '--- stderr ---',
+        result.stderr.trim() || '(boş)'
+      ]
+      if (!result.ok && result.stderr.includes('PermissionError')) {
+        parts.push('', 'Not: Seri port başka bir program tarafından kullanılıyor olabilir.')
+      }
+      void ctx
+      return { ok: result.ok, content: parts.join('\n') }
+    }
+  })
+
+  tools.push({
     name: 'webfetch',
     category: 'read',
     description:
@@ -2191,6 +2316,7 @@ export function createTools(options: {
     'create_directory',
     'run_command',
     'run_checks',
+    'run_python',
     'git',
     'browser_click',
     'browser_type',
@@ -2216,6 +2342,8 @@ export function createTools(options: {
     'grep',
     'run_command',
     'run_checks',
+    'run_python',
+    'usb_devices',
     'git',
     'execute',
     'todo_write',

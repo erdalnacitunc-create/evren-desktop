@@ -11,6 +11,7 @@ anahtarini ekleyerek erisebildigi modelleri kullanir.
 - **Web arama:** `docs/WEBSEARCH.md`
 - **External references:** `docs/REFERENCES.md`
 - **Code Mode:** `docs/CODE-MODE.md`
+- **USB / seri port:** `docs/USB.md`
 - **Guvenlik denetimi:** `docs/AUDIT.md` (`npm run audit:security`, `npm run test:e2e`)
 - **Code signing policy:** [`CODE_SIGNING_POLICY.md`](CODE_SIGNING_POLICY.md)
 - **Code of conduct:** [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)

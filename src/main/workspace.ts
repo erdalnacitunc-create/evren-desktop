@@ -3,6 +3,7 @@ import { promises as fs } from 'fs'
 import { existsSync } from 'fs'
 import type { Dirent } from 'fs'
 import { execFile, spawn } from 'child_process'
+import { AsyncLocalStorage } from 'async_hooks'
 import { randomUUID } from 'crypto'
 import {
   basename,
@@ -94,11 +95,27 @@ async function requireRoot(): Promise<string> {
 
 let workspaceRootOverride: string | null | undefined
 
+/**
+ * Oturum kapsamlı çalışma alanı. Paralel sohbetler birbirinin klasörünü
+ * ezmesin diye her ajan çalışması kendi köküyle bu bağlamda yürür.
+ */
+const workspaceScope = new AsyncLocalStorage<string | null>()
+
+export function runWithWorkspace<T>(root: string | null, fn: () => T): T {
+  return workspaceScope.run(root, fn)
+}
+
+export function currentWorkspaceScope(): string | null | undefined {
+  return workspaceScope.getStore()
+}
+
 export function setWorkspaceRootOverride(root: string | null): void {
   workspaceRootOverride = root
 }
 
 export async function getWorkspaceRoot(): Promise<string | null> {
+  const scoped = workspaceScope.getStore()
+  if (scoped !== undefined) return scoped
   if (workspaceRootOverride !== undefined) return workspaceRootOverride
   const settings = await getSettings()
   const raw = settings.workspacePath

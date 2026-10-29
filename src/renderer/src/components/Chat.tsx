@@ -22,6 +22,8 @@ import { api, formatNumber } from '../lib/ipc'
 import { estimateMultiverse, type MultiverseEstimate } from '../lib/multiverse'
 import { estimateMessagesTokens } from '../lib/tokens'
 import {
+  clearPendingApproval,
+  clearPendingQuestion,
   clearStream,
   getStreamForSession,
   registerStream
@@ -666,6 +668,7 @@ export function Chat({
       setQuestion(null)
       setQuestionAnswers([])
       setQuestionCustom('')
+      clearPendingQuestion(question.requestId, question.question.id)
     },
     [question]
   )
@@ -673,6 +676,7 @@ export function Chat({
   const cancelQuestion = useCallback(async (): Promise<void> => {
     if (!question) return
     await api.agent.answerQuestion(question.requestId, question.question.id, [])
+    clearPendingQuestion(question.requestId, question.question.id)
     setQuestion(null)
     setQuestionAnswers([])
     setQuestionCustom('')
@@ -908,6 +912,8 @@ export function Chat({
       setDraft({ ...draftRef.current })
       setUsage(resumed.usage ?? null)
       setStreaming(true)
+      if (resumed.approval) setApproval(resumed.approval)
+      if (resumed.question) setQuestion(resumed.question)
     }
     stickToBottomRef.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1067,6 +1073,7 @@ export function Chat({
       })
 
       if (!result.ok) {
+        clearStream(requestId)
         setError(result.error)
         setStreaming(false)
         requestRef.current = null
@@ -1421,7 +1428,13 @@ export function Chat({
   }, [messages, multiverse.enabled, runRequest, streaming])
 
   const stop = useCallback(async (): Promise<void> => {
-    if (requestRef.current) await api.chat.abort(requestRef.current)
+    const id = requestRef.current
+    if (id) {
+      await api.chat.abort(id)
+      clearStream(id)
+    }
+    setStreaming(false)
+    requestRef.current = null
   }, [])
 
   const respondApproval = useCallback(
@@ -1438,6 +1451,7 @@ export function Chat({
         setNotice(`"${approval.category}" kategorisi için her zaman izin verildi.`)
         onSettingsChanged()
       }
+      clearPendingApproval(approval.requestId, approval.toolCallId)
       setApproval(null)
     },
     [approval, onSettingsChanged]

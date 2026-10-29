@@ -6,7 +6,12 @@ import { rejectAllForRequest } from './agent/approval'
 import { rejectAllQuestions } from './agent/question'
 import { loadApiKey } from './credentials'
 import { getSettings } from './settings'
-import { getWorkspaceRoot } from './workspace'
+import {
+  ensureAgentWorkspace,
+  getWorkspaceRoot,
+  runWithWorkspace
+} from './workspace'
+import { getSession } from './sessionStore'
 import { buildMemoryContext } from './memory/retrieve'
 import { streamCompletion } from './sse'
 import { buildBaseBody, toErrorEvent } from './chatShared'
@@ -98,6 +103,16 @@ function createTrackingSend(
   }
 }
 
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    const { promises: fs } = await import('fs')
+    const stat = await fs.stat(target)
+    return stat.isDirectory()
+  } catch {
+    return false
+  }
+}
+
 export async function startChat(
   webContentsId: number,
   payload: ChatRequest
@@ -119,9 +134,13 @@ export async function startChat(
     () => null
   )
 
+  // Oturum kendi çalışma alanıyla çalışır; paralel sohbetler birbirini etkilemez.
+  const session = payload.sessionId ? await getSession(payload.sessionId) : null
   const workspaceRoot =
     payload.agent?.enabled && settings.workspaceTools !== false
-      ? await getWorkspaceRoot()
+      ? session?.workspacePath && (await pathExists(session.workspacePath))
+        ? session.workspacePath
+        : await ensureAgentWorkspace(payload.sessionId)
       : null
 
   const planMode = payload.agent?.profile === 'plan'
@@ -154,34 +173,47 @@ export async function startChat(
         }
       : payload
 
+  const runScoped = (task: () => Promise<void>): void => {
+    void runWithWorkspace(workspaceRoot, task).finally(() =>
+      controllers.delete(requestId)
+    )
+  }
+
   if (augmentedPayload.multiverse?.enabled) {
-    void runMultiverse({
-      requestId,
-      baseUrl: settings.baseUrl,
-      apiKey: key,
-      payload: augmentedPayload,
-      controller,
-      send
-    }).finally(() => controllers.delete(requestId))
+    runScoped(() =>
+      runMultiverse({
+        requestId,
+        baseUrl: settings.baseUrl,
+        apiKey: key,
+        payload: augmentedPayload,
+        controller,
+        send
+      })
+    )
   } else if (augmentedPayload.agent?.enabled) {
-    void runAgent({
-      requestId,
-      webContentsId,
-      baseUrl: settings.baseUrl,
-      apiKey: key,
-      payload: augmentedPayload,
-      controller,
-      send
-    }).finally(() => controllers.delete(requestId))
+    runScoped(() =>
+      runAgent({
+        requestId,
+        webContentsId,
+        baseUrl: settings.baseUrl,
+        apiKey: key,
+        payload: augmentedPayload,
+        controller,
+        send,
+        workspaceRoot
+      })
+    )
   } else {
-    void streamChat(
-      requestId,
-      settings.baseUrl,
-      key,
-      augmentedPayload,
-      controller,
-      send
-    ).finally(() => controllers.delete(requestId))
+    runScoped(() =>
+      streamChat(
+        requestId,
+        settings.baseUrl,
+        key,
+        augmentedPayload,
+        controller,
+        send
+      )
+    )
   }
 
   return { requestId }

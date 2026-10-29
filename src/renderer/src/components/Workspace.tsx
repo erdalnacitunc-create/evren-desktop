@@ -12,6 +12,7 @@ import {
   type TodoItem
 } from '@shared/types'
 import { api, formatContext, formatNumber } from '../lib/ipc'
+import { listActiveSessions } from '../lib/chatStream'
 import { AgentPanel } from './AgentPanel'
 import { Chat } from './Chat'
 import { EvrenLogo } from './EvrenLogo'
@@ -104,6 +105,24 @@ export function Workspace({
     workspacePath: string
   } | null>(null)
   const [closeNotice, setCloseNotice] = useState<string | null>(null)
+  const [activityTick, setActivityTick] = useState(0)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setActivityTick((tick) => tick + 1), 1500)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const activityBySession = useMemo(() => {
+    void activityTick
+    const map = new Map<string, { streaming: boolean; pendingInput: boolean }>()
+    for (const item of listActiveSessions()) {
+      map.set(item.sessionId, {
+        streaming: item.streaming,
+        pendingInput: item.pendingInput
+      })
+    }
+    return map
+  }, [activityTick])
   const [settingsTab, setSettingsTab] = useState<
     'general' | 'extensions' | 'memory' | 'github' | 'scheduled' | 'mcp' | 'api'
   >('general')
@@ -832,6 +851,26 @@ export function Workspace({
               >
                 <div className="session-top">
                   <span className="session-title">{session.title}</span>
+                  {(() => {
+                    const activity = activityBySession.get(session.id)
+                    if (!activity) return null
+                    if (activity.pendingInput) {
+                      return (
+                        <span
+                          className="session-live pending"
+                          title="Bu sohbet onay veya yanıt bekliyor"
+                        >
+                          !
+                        </span>
+                      )
+                    }
+                    if (activity.streaming) {
+                      return (
+                        <span className="session-live" title="Bu sohbette yanıt sürüyor" />
+                      )
+                    }
+                    return null
+                  })()}
                   <button
                     className="session-delete"
                     title="Sil"

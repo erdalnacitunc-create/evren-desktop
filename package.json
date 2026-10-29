@@ -1,6 +1,6 @@
 {
   "name": "evren-desktop",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "EVREN LLM API için açık kaynak Windows ve Linux masaüstü istemcisi",
   "main": "./out/main/index.js",
   "author": "evren-desktop",

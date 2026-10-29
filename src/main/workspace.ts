@@ -225,8 +225,33 @@ export async function deleteTemporaryWorkspace(path: string): Promise<boolean> {
   }
 }
 
-export async function getWorkspaceInfo(): Promise<WorkspaceInfo> {
-  const settings = await getSettings()
+/**
+ * Ajan çalışırken workspace yoksa (silinmiş, taşınmış veya hiç seçilmemiş)
+ * oturuma bağlı geçici bir workspace oluşturur. Böylece yerleşik dosya/kabuk
+ * araçları hiçbir zaman sessizce kaybolmaz.
+ */
+export async function ensureAgentWorkspace(sessionId?: string): Promise<string | null> {
+  const existing = await getWorkspaceRoot()
+  if (existing) return existing
+
+  const created = await createTemporaryWorkspace()
+  if (!created.path) return null
+
+  if (sessionId) {
+    try {
+      const store = await import('./sessionStore')
+      await store.patchSession(sessionId, {
+        workspacePath: created.path,
+        workspaceTemporary: true
+      })
+    } catch {
+      // oturum yoksa ayar yine de yazıldı
+    }
+  }
+  return created.path
+}
+
+export async function getWorkspaceInfo(): Promise<WorkspaceInfo> {  const settings = await getSettings()
   const root = await getWorkspaceRoot()
   return {
     path: root ?? settings.workspacePath ?? null,

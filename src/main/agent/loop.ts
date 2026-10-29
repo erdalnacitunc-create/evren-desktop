@@ -8,6 +8,7 @@ import { getSession } from '../sessionStore'
 import { streamCompletion } from '../sse'
 import { getSettings } from '../settings'
 import { getWorkspaceRoot } from '../workspace'
+import { ensureAgentWorkspace } from '../workspace'
 import { resolvePermission, toolCategory } from '../../shared/permissions'
 import { approvalKey, waitForApproval } from './approval'
 import { createTools } from './tools'
@@ -79,7 +80,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     options.workspaceRoot !== undefined
       ? options.workspaceRoot
       : payload.agent?.workspace !== false && settings.workspaceTools !== false
-        ? await getWorkspaceRoot()
+        ? await ensureAgentWorkspace(payload.sessionId)
         : null
 
   const executeSubagent = (

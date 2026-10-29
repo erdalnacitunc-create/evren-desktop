@@ -1422,6 +1422,25 @@ export function createTools(options: {
       )
       const sandbox = {
         tools: api,
+        fetch: async (input: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => {
+          const target = new URL(String(input))
+          if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+            throw new Error('Yalnızca http/https fetch desteklenir.')
+          }
+          const response = await fetch(target, {
+            method: init?.method ?? 'GET',
+            headers: init?.headers,
+            body: init?.body,
+            signal: AbortSignal.timeout(30_000)
+          })
+          const text = await response.text()
+          return {
+            ok: response.ok,
+            status: response.status,
+            headers: Object.fromEntries(response.headers.entries()),
+            text: text.slice(0, 100_000)
+          }
+        },
         console: {
           log: (...values: unknown[]) =>
             logs.push(values.map((value) => String(value)).join(' ').slice(0, 500))
@@ -1433,7 +1452,11 @@ export function createTools(options: {
         Object,
         String,
         Number,
-        Boolean
+        Boolean,
+        Promise,
+        URL,
+        TextEncoder,
+        TextDecoder
       }
       try {
         const context = vm.createContext(sandbox)
@@ -2178,11 +2201,57 @@ export function createTools(options: {
         (tool) => !readOnlyBlocked.has(tool.name) && !tool.name.startsWith('computer_')
       )
     : tools
-  const byName = new Map(activeTools.map((tool) => [tool.name, tool]))
+
+  // Sıralama kritik: sağlayıcılar uzun araç listelerini kesebilir. Yerleşik
+  // araçlar önce, MCP/eklenti araçları en sonda gönderilir.
+  const coreOrder = [
+    'read_file',
+    'write_file',
+    'edit_file',
+    'patch',
+    'delete_file',
+    'create_directory',
+    'list_files',
+    'glob',
+    'grep',
+    'run_command',
+    'run_checks',
+    'git',
+    'execute',
+    'todo_write',
+    'question',
+    'webfetch',
+    'websearch',
+    'session',
+    'reference',
+    'spawn_agent',
+    'task_status',
+    'task_wait',
+    'task_cancel',
+    'task_list',
+    'skill',
+    'repo_map',
+    'code_search'
+  ]
+  const isExtensionTool = (name: string): boolean =>
+    name.startsWith('mcp_') || name.startsWith('plugin_')
+  const rank = (name: string): number => {
+    const index = coreOrder.indexOf(name)
+    if (index >= 0) return index
+    if (isExtensionTool(name)) return 10_000
+    if (name.startsWith('browser_')) return 500
+    if (name.startsWith('computer_')) return 600
+    return 400
+  }
+  const orderedTools = [...activeTools].sort((left, right) => {
+    const diff = rank(left.name) - rank(right.name)
+    return diff !== 0 ? diff : left.name.localeCompare(right.name)
+  })
+  const byName = new Map(orderedTools.map((tool) => [tool.name, tool]))
 
   return {
     definitions: () =>
-      activeTools.map((tool) => ({
+      orderedTools.slice(0, 150).map((tool) => ({
         type: 'function',
         function: {
           name: tool.name,

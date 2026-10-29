@@ -1,6 +1,0 @@
-1425220861fe85cff38666fe3b87f90d8782dbf2a5ae09c3252c37c8e0e66ffc  EVREN-Desktop-Setup-0.2.4-x64.exe
-7576fc93565044d3f11719c03002b09ff8dc5e74cc986d52ba01c0442bd7477d  EVREN-Desktop-Setup-0.2.4-x64.exe.blockmap
-4b58d598f7c8e98727a00334c5f8c78dc3cecb56887f3aba2dcaabe69cb6bc26  EVREN-Desktop-0.2.4-portable-x64.zip
-2737664f3961f407bf28a1ddd8bec875f650ac9e5b91562be42b07f47683399c  evren-desktop_0.2.4_amd64.deb
-91120d6cdd2ad42b5577f8459d9bca0d4f503b55aa0a7a4aa7dce79af80b35ff  EVREN Desktop-0.2.4.AppImage
-2567a02fcf4d14ec64cfb682bedc9616d9282f91dc2b7dd69035b05ad04237bc  latest.yml

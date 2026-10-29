@@ -188,11 +188,11 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-## 0.2.3 Beta
+## 0.2.4 Beta
 
 ### Windows x64
-- Kurulum: `release/EVREN-Desktop-Setup-0.2.3-x64.exe`
-- Portable: `release/EVREN-Desktop-0.2.3-portable-x64.zip`
+- Kurulum: `release/EVREN-Desktop-Setup-0.2.4-x64.exe`
+- Portable: `release/EVREN-Desktop-0.2.4-portable-x64.zip`
 - Kullanıcı bazlı NSIS kurulumu
 - Ayrı beta profili: `%APPDATA%\EVREN Desktop Beta`
 - API anahtarı/token/session içermez

@@ -388,6 +388,8 @@ export interface StoredMessage {
   createdAt: number
   usage?: ChatUsage
   finishReason?: string | null
+  /** Ana süreçte yanıtın tekrar kaydedilmesini önlemek için. */
+  requestId?: string
 }
 
 export interface Session {

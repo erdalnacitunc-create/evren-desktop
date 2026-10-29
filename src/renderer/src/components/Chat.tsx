@@ -21,6 +21,11 @@ import type {
 import { api, formatNumber } from '../lib/ipc'
 import { estimateMultiverse, type MultiverseEstimate } from '../lib/multiverse'
 import { estimateMessagesTokens } from '../lib/tokens'
+import {
+  clearStream,
+  getStreamForSession,
+  registerStream
+} from '../lib/chatStream'
 import { extractArtifacts, formatBytes, type Artifact } from '../lib/artifacts'
 import { PERMISSION_LABELS } from '@shared/permissions'
 import { CommandPalette } from './CommandPalette'
@@ -893,6 +898,17 @@ export function Chat({
     draftRef.current = { ...EMPTY_DRAFT }
     usageRef.current = null
     requestRef.current = null
+
+    // Sekme değişip geri dönüldüyse devam eden akışı geri yükle.
+    const resumed = getStreamForSession(sessionId)
+    if (resumed && !resumed.done) {
+      draftRef.current = { content: resumed.content, reasoning: resumed.reasoning }
+      requestRef.current = resumed.requestId
+      usageRef.current = resumed.usage ?? null
+      setDraft({ ...draftRef.current })
+      setUsage(resumed.usage ?? null)
+      setStreaming(true)
+    }
     stickToBottomRef.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
@@ -977,7 +993,10 @@ export function Chat({
       } else if (event.type === 'multiverse-synthesis') {
         setMvPhase('synthesis')
       } else if (event.type === 'done') {
-        commitDraft(true)
+        // Yanıt ana süreçte kaydedildi; burada yalnızca ekranı güncelliyoruz.
+        commitDraft(false)
+        clearStream(event.requestId)
+        void onSessionUpdated()
         setFinish(event.finishReason)
         setStreaming(false)
         setApproval(null)
@@ -989,6 +1008,7 @@ export function Chat({
         void api.memory.learn(sessionId)
         void api.app.notify('EVREN Desktop', 'Yanıt hazır.')
       } else if (event.type === 'error') {
+        clearStream(event.requestId)
         setError(friendlyError(event.status, event.error))
         setStreaming(false)
         setApproval(null)
@@ -1012,6 +1032,7 @@ export function Chat({
     async (payloadMessages: ChatMessage[], options?: { multiverse?: boolean }): Promise<void> => {
       const requestId = crypto.randomUUID()
       requestRef.current = requestId
+      registerStream(requestId, sessionId)
       draftRef.current = { ...EMPTY_DRAFT }
       setDraft(EMPTY_DRAFT)
       setError(null)

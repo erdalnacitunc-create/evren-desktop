@@ -17,6 +17,12 @@ export function waitForQuestion(
       resolve(null)
       return
     }
+    // Aynı anahtar için ikinci bekleyiş gelirse ilki asılı bırakılmaz.
+    const previous = pending.get(key)
+    if (previous) {
+      pending.delete(key)
+      previous(null)
+    }
     pending.set(key, resolve)
     signal.addEventListener(
       'abort',
@@ -38,7 +44,11 @@ export function resolveQuestion(
   const resolver = pending.get(key)
   if (!resolver) return false
   pending.delete(key)
-  resolver(answers.map((answer) => String(answer)).filter(Boolean))
+  resolver(
+    answers
+      .map((answer) => String(answer).trim())
+      .filter((answer) => answer.length > 0)
+  )
   return true
 }
 

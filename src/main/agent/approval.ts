@@ -12,6 +12,12 @@ export function waitForApproval(key: string, controller: AbortController): Promi
       resolve(false)
       return
     }
+    // Aynı anahtar için ikinci bekleyiş gelirse ilki asılı bırakılmaz.
+    const previous = pending.get(key)
+    if (previous) {
+      pending.delete(key)
+      previous(false)
+    }
     pending.set(key, resolve)
     controller.signal.addEventListener(
       'abort',

@@ -118,6 +118,11 @@ export const api = {
     start: (payload: ChatRequest): Promise<Result<{ requestId: string }>> =>
       window.evren.chat.start(payload),
     abort: (requestId: string): Promise<Result<boolean>> => window.evren.chat.abort(requestId),
+    steer: (
+      requestId: string,
+      text: string
+    ): Promise<Result<{ queued: boolean; pending: number }>> =>
+      window.evren.chat.steer(requestId, text),
     onEvent: (callback: (event: ChatEvent) => void): (() => void) =>
       window.evren.chat.onEvent(callback as (event: unknown) => void)
   },

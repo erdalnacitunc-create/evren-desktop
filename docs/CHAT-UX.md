@@ -59,3 +59,48 @@ Detaylar:
 
 Kod: `src/renderer/src/lib/promptHistory.ts` (saf fonksiyonlar), testler:
 `node scripts/run-unit.cjs scripts/prompt-history-test.ts`.
+
+## Sekme kuyruğu ve araya girme (steering)
+
+Yanıt sürerken besteci kilitlenmez. Enter'a basınca iki davranıştan biri devreye girer:
+
+| Durum | Davranış | Düğme |
+|---|---|---|
+| Ajan açık, Çoklu Evren kapalı | Mesaj doğrudan ajana iletilir (**araya girme**) | `Araya gir` |
+| Düz akış veya Çoklu Evren | Mesaj sıraya alınır, yanıt bitince otomatik gönderilir | `Sıraya al` |
+
+Araya girme:
+
+- Mesaj ana süreçte istek kimliğine bağlı bir kuyruğa yazılır
+  (`src/main/agent/steering.ts`).
+- Ajan döngüsü her adımın başında ve yanıt bittiğinde kuyruğu boşaltır; metni
+  konuşmaya kullanıcı mesajı olarak ekler ve `steering` olayıyla arayüze düşer.
+- Araç çağrısı sürüyorsa mesaj o çağrı bitip sıradaki adıma geçildiğinde iletilir.
+  Yani anında kesme değil, **adım sınırında** iletim vardır.
+- Yanıt biterken araya girilmişse istek kapanmaz; asistan metni kaydedilir ve döngü
+  yeni mesajla devam eder.
+- Aynı istek için en fazla 20 bekleyen mesaj; her biri en fazla 8000 karakter.
+- Gönder düğmesi akış sırasında `Araya gir` olarak etiketlenir; arayüzte kaç mesajın
+  beklediğini gösteren sarı rozet çıkar.
+
+Sıra (queue):
+
+- Yalnızca düz akışta (ajan kapalı) ve Çoklu Evren'de kullanılır.
+- Bestecinin üstünde numaralı rozetler görünür; `×` ile tek tek çıkarılabilir.
+- Yanıt `done` olduğunda ilk istem otomatik gönderilir, sonra sıradaki.
+- `Durdur` hem akışı iptal eder hem sırayı temizler ve kaç istemin iptal edildiğini bildirir.
+- Hata durumunda sıra korunur; kullanıcı yeniden gönderebilir.
+
+Sınırlar:
+
+- Araya girme yalnızca ajan çalışırken desteklenir. Düz akışta `chat:steer` çağrısı
+  `queued: false` döner ve arayüz mesajı sıraya alır; mesaj kaybolmaz.
+- Çoklu Evren karşılaştırma akışında araya girme yoktur.
+- Komutlar (`/...`) akış sürerken çalıştırılmaz; uyarı gösterilir.
+
+Testler:
+
+```bash
+node scripts/run-unit.cjs scripts/steering-test.ts      # 18 senaryo
+node scripts/run-unit.cjs scripts/steer-gate-test.ts    # 3 senaryo (kapı)
+```

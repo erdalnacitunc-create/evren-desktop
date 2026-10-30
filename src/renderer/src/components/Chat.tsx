@@ -421,6 +421,8 @@ export function Chat({
     index: -1,
     draft: ''
   }))
+  const [queue, setQueue] = useState<Array<{ id: string; text: string }>>([])
+  const [steeringCount, setSteeringCount] = useState(0)
 
   const scrollToBottom = useCallback((): void => {
     const element = scrollRef.current
@@ -973,6 +975,14 @@ export function Chat({
       } else if (event.type === 'tool-call') {
         commitDraft(false, true)
         setItems((prev) => [...prev, { kind: 'tool', call: event.call }])
+      } else if (event.type === 'steering') {
+        commitDraft(false, true)
+        setItems((prev) => [
+          ...prev,
+          { kind: 'message', role: 'user', content: event.text }
+        ])
+        onPersistUser(event.text)
+        setSteeringCount((count) => Math.max(0, count - 1))
       } else if (event.type === 'tool-result') {
         setItems((prev) =>
           prev.map((item) =>
@@ -1386,7 +1396,30 @@ export function Chat({
 
   const send = useCallback(async (): Promise<void> => {
     const text = input.trim()
-    if (!text || streaming) return
+    if (!text) return
+
+    if (streaming) {
+      if (text.startsWith('/')) {
+        setNotice('Yanıt sürerken komut çalıştırılamaz.')
+        return
+      }
+      const target = requestRef.current
+      // Ajan çalışıyorsa mesaj doğrudan döngüye iletilir (steering).
+      if (agent.enabled && !multiverse.enabled && target) {
+        const result = await api.chat.steer(target, text)
+        if (result.ok && result.data.queued) {
+          setInput('')
+          setSteeringCount(result.data.pending)
+          setNotice('Mesajınız ajanın sıradaki adımında iletilecek.')
+          return
+        }
+      }
+      // Düz akışta mesaj sıraya alınır, yanıt bitince gönderilir.
+      setQueue((prev) => [...prev, { id: crypto.randomUUID(), text }])
+      setInput('')
+      setNotice('Yanıt sürüyor; mesaj sıraya alındı.')
+      return
+    }
 
     if (text.startsWith('/')) {
       await executeCommand(text)
@@ -1487,6 +1520,14 @@ export function Chat({
     }, 0)
   }, [input, seededHistory])
 
+  // Sıradaki istemleri yanıt bitince sırayla gönder.
+  useEffect(() => {
+    if (streaming || queue.length === 0) return
+    const [next, ...rest] = queue
+    setQueue(rest)
+    void sendPrompt(next.text)
+  }, [queue, sendPrompt, streaming])
+
   const stop = useCallback(async (): Promise<void> => {
     const id = requestRef.current
     if (id) {
@@ -1495,7 +1536,10 @@ export function Chat({
     }
     setStreaming(false)
     requestRef.current = null
-  }, [])
+    setSteeringCount(0)
+    if (queue.length > 0) setNotice(`${queue.length} sıradaki istem iptal edildi.`)
+    setQueue([])
+  }, [queue.length])
 
   const respondApproval = useCallback(
     async (approved: boolean, always = false): Promise<void> => {
@@ -2327,6 +2371,32 @@ export function Chat({
             )}
           </div>
         )}
+        {(queue.length > 0 || steeringCount > 0) && (
+          <div className="composer-queue">
+            {steeringCount > 0 && (
+              <span className="queue-badge steering">
+                {steeringCount} mesaj ajanın sıradaki adımında iletilecek
+              </span>
+            )}
+            {queue.map((item, index) => (
+              <span className="queue-chip" key={item.id}>
+                <span className="queue-index">{index + 1}</span>
+                <span className="queue-text" title={item.text}>
+                  {item.text}
+                </span>
+                <button
+                  className="attach-remove"
+                  title="Sıradan çıkar"
+                  onClick={() =>
+                    setQueue((prev) => prev.filter((entry) => entry.id !== item.id))
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="composer-attachments">
             {attachments.map((attachment) => (
@@ -2365,7 +2435,9 @@ export function Chat({
           }}
           placeholder={
             streaming
-              ? 'Yanıt sürerken yazabilirsiniz...'
+              ? agent.enabled && !multiverse.enabled
+                ? 'Araya girin: ajanın sıradaki adımında iletilir...'
+                : 'Yanıt sürerken yazabilirsiniz; mesaj sıraya alınır...'
               : approval
                 ? 'Ajan onay bekliyor...'
                 : profile === 'plan'
@@ -2416,9 +2488,23 @@ export function Chat({
             {finish ? ` · bitiş: ${finish}` : ''}
           </span>
           {streaming ? (
-            <button className="btn btn-stop" onClick={() => void stop()}>
-              Durdur
-            </button>
+            <div className="composer-running">
+              <button
+                className="btn btn-queue"
+                onClick={() => void send()}
+                disabled={!input.trim()}
+                title={
+                  agent.enabled && !multiverse.enabled
+                    ? 'Ajanın sıradaki adımında ilet'
+                    : 'Yanıt bitince gönder'
+                }
+              >
+                {agent.enabled && !multiverse.enabled ? 'Araya gir' : 'Sıraya al'}
+              </button>
+              <button className="btn btn-stop" onClick={() => void stop()}>
+                Durdur
+              </button>
+            </div>
           ) : (
             <button className="btn" onClick={() => void send()} disabled={!input.trim()}>
               Gönder

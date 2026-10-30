@@ -11,6 +11,7 @@ import { getWorkspaceRoot } from '../workspace'
 import { ensureAgentWorkspace } from '../workspace'
 import { resolvePermission, permissionResource, toolCategory } from '../../shared/permissions'
 import { approvalKey, waitForApproval } from './approval'
+import { drainSteering } from './steering'
 import { createTools } from './tools'
 import { runSubagent } from './subagent'
 import {
@@ -266,12 +267,32 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   }
   let toolCallCount = 0
 
+  /**
+   * Kullanıcı yanıt sürerken mesaj yazdıysa konuşmaya ekler.
+   * `pendingAssistant` verilirse önce asistanın o ana kadar ürettiği metin kaydedilir.
+   * En az bir mesaj eklendiyse true döner; döngü bitmek yerine devam eder.
+   */
+  const applySteering = (pendingAssistant?: string): boolean => {
+    const texts = drainSteering(requestId)
+    if (texts.length === 0) return false
+    if (pendingAssistant !== undefined && pendingAssistant.trim().length > 0) {
+      messages.push({ role: 'assistant', content: pendingAssistant })
+    }
+    for (const text of texts) {
+      messages.push({ role: 'user', content: text })
+      send({ requestId, type: 'steering', text })
+    }
+    return true
+  }
+
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
       if (controller.signal.aborted) {
         send({ requestId, type: 'done', finishReason: 'aborted' })
         return
       }
+
+      if (step > 0) applySteering()
 
       const body = {
         ...buildBaseBody(payload),
@@ -291,6 +312,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
 
       if (result.toolCalls.length === 0) {
+        // Araç çağrısı yok ama kullanıcı araya girdiyse yanıtı bitirme, devam et.
+        if (applySteering(result.content ?? '')) continue
         send({ requestId, type: 'done', finishReason: result.finishReason })
         return
       }

@@ -58,6 +58,8 @@ export const api = {
   chat: {
     start: (payload: unknown) => ipcRenderer.invoke('chat:start', payload),
     abort: (requestId: string) => ipcRenderer.invoke('chat:abort', requestId),
+    steer: (requestId: string, text: string) =>
+      ipcRenderer.invoke('chat:steer', requestId, text),
     onEvent: (callback: (event: unknown) => void) => {
       const listener = (_event: unknown, data: unknown): void => callback(data)
       ipcRenderer.on('chat:event', listener)

@@ -4,6 +4,11 @@ import { runAgent } from './agent/loop'
 import { runMultiverse } from './multiverse'
 import { rejectAllForRequest } from './agent/approval'
 import { rejectAllQuestions } from './agent/question'
+import {
+  clearSteering,
+  countSteering,
+  pushSteering
+} from './agent/steering'
 import { loadApiKey } from './credentials'
 import { getSettings } from './settings'
 import {
@@ -18,14 +23,21 @@ import { buildBaseBody, toErrorEvent } from './chatShared'
 import type { ChatEvent, ChatRequest, ChatUsage } from '../shared/types'
 
 const controllers = new Map<string, AbortController>()
+/**
+ * Araya girme (steering) yalnızca ajan döngüsü çalışırken desteklenir.
+ * Düz akışlarda mesaj kaybolmasın diye burada işaretlenir.
+ */
+const steerable = new Set<string>()
 
 export function abortAllChats(): void {
   for (const [requestId, controller] of controllers) {
     rejectAllForRequest(requestId)
     rejectAllQuestions(requestId)
+    clearSteering(requestId)
     controller.abort()
   }
   controllers.clear()
+  steerable.clear()
 }
 
 export function abortChat(requestId: string): boolean {
@@ -33,9 +45,28 @@ export function abortChat(requestId: string): boolean {
   if (!controller) return false
   rejectAllForRequest(requestId)
   rejectAllQuestions(requestId)
+  clearSteering(requestId)
+  steerable.delete(requestId)
   controller.abort()
   controllers.delete(requestId)
   return true
+}
+
+/**
+ * Çalışan bir ajan isteğine kullanıcı mesajı ekler.
+ * Ajan döngüsü bir sonraki adımda bu mesajı konuşmaya katar.
+ * `queued: false` ise çağıran taraf mesajı kendi sırasına almalıdır.
+ */
+export function steerChat(requestId: string, text: string): { queued: boolean; pending: number } {
+  if (!controllers.has(requestId) || !steerable.has(requestId)) {
+    return { queued: false, pending: 0 }
+  }
+  const queued = pushSteering(requestId, text)
+  return { queued, pending: countSteering(requestId) }
+}
+
+export function steeringCount(requestId: string): number {
+  return countSteering(requestId)
 }
 
 export function emitChatEvent(webContentsId: number, event: ChatEvent): void {
@@ -174,9 +205,11 @@ export async function startChat(
       : payload
 
   const runScoped = (task: () => Promise<void>): void => {
-    void runWithWorkspace(workspaceRoot, task).finally(() =>
+    void runWithWorkspace(workspaceRoot, task).finally(() => {
       controllers.delete(requestId)
-    )
+      steerable.delete(requestId)
+      clearSteering(requestId)
+    })
   }
 
   if (augmentedPayload.multiverse?.enabled) {
@@ -191,6 +224,7 @@ export async function startChat(
       })
     )
   } else if (augmentedPayload.agent?.enabled) {
+    steerable.add(requestId)
     runScoped(() =>
       runAgent({
         requestId,

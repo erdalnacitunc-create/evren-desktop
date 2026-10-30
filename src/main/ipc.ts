@@ -13,7 +13,7 @@ import { appIconPath } from './appIcon'
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { ApiError, getQuota, listModels } from './api'
-import { abortChat, startChat } from './chat'
+import { abortChat, startChat, steerChat } from './chat'
 import { approvalKey, resolveApproval } from './agent/approval'
 import { resolveQuestion } from './agent/question'
 import {
@@ -392,6 +392,21 @@ export function registerIpcHandlers(): void {
       return fail(error)
     }
   })
+
+  registerHandler(
+    'chat:steer',
+    async (
+      _event,
+      requestId: string,
+      text: string
+    ): Promise<Result<{ queued: boolean; pending: number }>> => {
+      try {
+        return { ok: true, data: steerChat(String(requestId ?? ''), String(text ?? '')) }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
 
   registerHandler(
     'agent:approve',

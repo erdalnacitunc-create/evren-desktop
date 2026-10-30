@@ -20,7 +20,8 @@
     "audit:licenses": "npx -y license-checker --summary --production",
     "test:e2e": "node scripts/e2e-smoke.cjs",
     "build:win": "electron-vite build && electron-builder --win --publish never",
-    "build:linux": "electron-vite build && electron-builder --linux --publish never"
+    "build:linux": "electron-vite build && electron-builder --linux --publish never",
+    "test:unit": "node scripts/run-unit.cjs scripts/ipc-guard-test.ts && node scripts/run-unit.cjs scripts/logger-test.ts"
   },
   "build": {
     "appId": "com.evren.desktop",
@@ -108,6 +109,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
     "mermaid": "^12.2.0",
     "pdfjs-dist": "^6.4.299",

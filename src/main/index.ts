@@ -10,6 +10,7 @@ import {
 } from 'electron'
 import { join } from 'path'
 import { appIconPath } from './appIcon'
+import { createLogger, installCrashLogging, logFilePath, logger } from './logger'
 import { abortAllChats } from './chat'
 import { cleanupInspectCache } from './extensions'
 import { registerIpcHandlers } from './ipc'
@@ -32,6 +33,7 @@ import { loadWindowState, trackWindowState } from './windowState'
 
 const isDev = !!process.env['ELECTRON_RENDERER_URL']
 const acpMode = process.argv.includes('--acp') || process.env['EVREN_ACP'] === '1'
+const log = createLogger('app')
 
 if (acpMode) {
   app.disableHardwareAcceleration()
@@ -333,6 +335,10 @@ async function createWindow(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  installCrashLogging()
+  log.info(
+    `EVREN Desktop başlıyor — v${app.getVersion()} · ${process.platform}/${process.arch} · paketli=${app.isPackaged} · günlük=${logFilePath()}`
+  )
   nativeTheme.themeSource = 'dark'
   if (process.platform === 'win32') {
     app.setAppUserModelId('com.evren.desktop')
@@ -372,6 +378,16 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (acpMode) return
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('render-process-gone', (_event, webContents, details) => {
+  log.error(
+    `Renderer çöktü — reason=${details.reason} exitCode=${details.exitCode} url=${webContents.getURL()}`
+  )
+})
+
+app.on('child-process-gone', (_event, details) => {
+  log.error(`Alt süreç sona erdi — type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`)
 })
 
 app.on('before-quit', () => {

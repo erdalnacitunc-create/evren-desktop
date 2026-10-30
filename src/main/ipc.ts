@@ -8,8 +8,10 @@ import {
   type IpcMainInvokeEvent
 } from 'electron'
 import { assertTrustedSender } from './ipcGuard'
+import { logFilePath } from './logger'
 import { appIconPath } from './appIcon'
 import { promises as fs } from 'fs'
+import { dirname } from 'path'
 import { ApiError, getQuota, listModels } from './api'
 import { abortChat, startChat } from './chat'
 import { approvalKey, resolveApproval } from './agent/approval'
@@ -1760,6 +1762,20 @@ export function registerIpcHandlers(): void {
       }
     }
   )
+
+  registerHandler('app:getLogPath', (): Result<string> => ({ ok: true, data: logFilePath() }))
+
+  registerHandler('app:openLogs', async (): Promise<Result<true>> => {
+    try {
+      const target = logFilePath()
+      await fs.mkdir(dirname(target), { recursive: true })
+      const error = await shell.openPath(dirname(target))
+      if (error) throw new Error(error)
+      return { ok: true, data: true }
+    } catch (error) {
+      return fail(error)
+    }
+  })
 
   registerHandler(
     'app:notify',

@@ -14,6 +14,9 @@ import { appIconPath } from './appIcon'
 import { appendMessage, createSession, renameSession } from './sessionStore'
 import { getSettings } from './settings'
 import { streamCompletion } from './sse'
+import { createLogger } from './logger'
+
+const log = createLogger('scheduler')
 
 let tasks: ScheduledTask[] = []
 let timer: NodeJS.Timeout | null = null
@@ -57,7 +60,7 @@ async function persist(): Promise<void> {
       await fs.writeFile(temp, snapshot, 'utf8')
       await fs.rename(temp, target)
     })
-    .catch((error) => console.error('Zamanlanmış görevler kaydedilemedi:', error))
+    .catch((error) => log.error('Zamanlanmış görevler kaydedilemedi:', error))
   return writeChain
 }
 

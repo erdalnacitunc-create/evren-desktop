@@ -2,6 +2,9 @@ import { app } from 'electron'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { InstalledExtension } from '../../shared/types'
+import { createLogger } from '../logger'
+
+const log = createLogger('extensions/store')
 
 let cache: InstalledExtension[] | null = null
 let writeChain: Promise<void> = Promise.resolve()
@@ -37,7 +40,7 @@ function persist(): Promise<void> {
       await fs.rename(temp, target)
     })
     .catch((error) => {
-      console.error('Uzantı kayıt defteri yazılamadı:', error)
+      log.error('Uzantı kayıt defteri yazılamadı:', error)
     })
   return writeChain
 }

@@ -24,7 +24,9 @@ export const api = {
     openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
     openPath: (path: string) => ipcRenderer.invoke('app:openPath', path),
     chooseDirectory: (title?: string) => ipcRenderer.invoke('app:chooseDirectory', title),
-    notify: (title: string, body: string) => ipcRenderer.invoke('app:notify', title, body)
+    notify: (title: string, body: string) => ipcRenderer.invoke('app:notify', title, body),
+    logPath: () => ipcRenderer.invoke('app:getLogPath'),
+    openLogs: () => ipcRenderer.invoke('app:openLogs')
   },
   subagent: {
     list: (sessionId?: string) => ipcRenderer.invoke('subagent:list', sessionId),

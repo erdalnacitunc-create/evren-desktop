@@ -16,6 +16,9 @@ import type {
 import { listExtensions } from '../extensions/store'
 import { CallbackServer, StoredOAuthProvider } from './oauthProvider'
 import { clearOAuthState } from './oauthStore'
+import { createLogger } from '../logger'
+
+const log = createLogger('mcp/manager')
 
 interface ServerResource {
   uri: string
@@ -333,7 +336,7 @@ export async function connectMcp(extension: InstalledExtension): Promise<McpServ
         connection.resources = resources
         connection.resourceTemplates = templates
       } catch (error) {
-        console.warn('MCP kaynakları alınamadı:', error)
+        log.warn('MCP kaynakları alınamadı:', error)
       }
     }
 
@@ -345,7 +348,7 @@ export async function connectMcp(extension: InstalledExtension): Promise<McpServ
           'MCP prompt listesi'
         )) as ServerPrompt[]
       } catch (error) {
-        console.warn('MCP promptları alınamadı:', error)
+        log.warn('MCP promptları alınamadı:', error)
       }
     }
 
@@ -576,7 +579,7 @@ export async function listMcpTasks(): Promise<McpTaskInfo[]> {
       )) as { tasks?: Array<Record<string, unknown>> }
       for (const task of result.tasks ?? []) items.push(toTaskInfo(connection, task))
     } catch (error) {
-      console.warn('MCP görevleri alınamadı:', error)
+      log.warn('MCP görevleri alınamadı:', error)
     }
   }
   return items

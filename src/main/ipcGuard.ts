@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { resolve, sep } from 'path'
 import { fileURLToPath } from 'url'
+import { createLogger } from './logger'
 
 /**
  * Renderer kaynaklarının bulunabileceği kökler.
@@ -125,6 +126,7 @@ export function assertTrustedSender(
 ): void {
   const verdict = evaluateSender(event, channel)
   if (!verdict.ok) {
+    createLogger('ipc').warn(`Reddedildi — ${verdict.reason}`)
     throw new Error(`IPC reddedildi — ${verdict.reason}`)
   }
 }

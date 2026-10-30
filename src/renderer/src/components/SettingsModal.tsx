@@ -110,8 +110,12 @@ export function SettingsModal({
     }
   }
 
-  async function saveTheme(theme: ThemeMode): Promise<void> {
-    setBusy(true)
+  async function openLogs(): Promise<void> {
+    const result = await api.app.openLogs()
+    if (!result.ok) setError(result.error)
+  }
+
+  async function saveTheme(theme: ThemeMode): Promise<void> {    setBusy(true)
     setError(null)
     try {
       const result = await api.settings.update({ theme })
@@ -301,6 +305,20 @@ export function SettingsModal({
           <section className="settings-section">
             <h3>Güncellemeler</h3>
             <UpdatePanel />
+          </section>
+
+          <section className="settings-section">
+            <h3>Günlükler</h3>
+            <p className="muted">
+              Hata ve başlatma kayıtları kullanıcı verisi klasöründeki <code>logs</code> dizininde
+              tutulur. Dosya 5 MB'a ulaşınca döner; API anahtarı ve token gibi değerler yazılmadan
+              önce maskelenir.
+            </p>
+            <div className="inline-actions">
+              <button className="btn-ghost" onClick={() => void openLogs()}>
+                Günlük klasörünü aç
+              </button>
+            </div>
           </section>
 
           <section className="settings-section">

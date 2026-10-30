@@ -2,6 +2,9 @@ import { app, BrowserWindow } from 'electron'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { SubagentTaskInfo, SubagentTaskStatus, SubagentType } from '../../shared/types'
+import { createLogger } from '../logger'
+
+const log = createLogger('agent/taskManager')
 
 interface TaskRecord {
   info: SubagentTaskInfo
@@ -38,7 +41,7 @@ async function persistTasks(): Promise<void> {
       await fs.rename(temp, target)
     })
     .catch((error) => {
-      console.error('Alt-ajan görevleri kaydedilemedi:', error)
+      log.error('Alt-ajan görevleri kaydedilemedi:', error)
     })
   return persistChain
 }

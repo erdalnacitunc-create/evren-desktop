@@ -2,6 +2,9 @@ import { app } from 'electron'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { Session, SessionSummary, StoredMessage, TodoItem } from '../shared/types'
+import { createLogger } from './logger'
+
+const log = createLogger('sessionStore')
 
 let cache: Session[] | null = null
 let writeChain: Promise<void> = Promise.resolve()
@@ -33,7 +36,7 @@ function persist(): Promise<void> {
       await fs.rename(temp, target)
     })
     .catch((error) => {
-      console.error('Oturumlar kaydedilemedi:', error)
+      log.error('Oturumlar kaydedilemedi:', error)
     })
   return writeChain
 }

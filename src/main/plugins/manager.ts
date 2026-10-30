@@ -8,6 +8,9 @@ import type {
   PluginStatus
 } from '../../shared/types'
 import { extensionsRoot, listExtensions } from '../extensions/store'
+import { createLogger } from '../logger'
+
+const log = createLogger('plugins/manager')
 
 interface ToolInfo {
   name: string
@@ -190,7 +193,7 @@ async function handleMessage(
   }
 
   if (message.type === 'log') {
-    console.log(`[plugin:${connection.extension.name}] ${String(message.message ?? '')}`)
+    log.info(`[plugin:${connection.extension.name}] ${String(message.message ?? '')}`)
     return
   }
 

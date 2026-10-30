@@ -55,7 +55,9 @@ export const api = {
     chooseDirectory: (title?: string): Promise<Result<string | null>> =>
       window.evren.app.chooseDirectory(title),
     notify: (title: string, body: string): Promise<Result<boolean>> =>
-      window.evren.app.notify(title, body)
+      window.evren.app.notify(title, body),
+    logPath: (): Promise<Result<string>> => window.evren.app.logPath(),
+    openLogs: (): Promise<Result<true>> => window.evren.app.openLogs()
   },
   subagent: {
     list: (

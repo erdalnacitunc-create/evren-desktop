@@ -157,10 +157,14 @@ export const api = {
   },
   terminal: {
     status: (): Promise<Result<TerminalStatus>> => window.evren.terminal.status(),
-    start: (cwd?: string): Promise<Result<TerminalStatus>> => window.evren.terminal.start(cwd),
+    start: (cwd?: string, cols?: number, rows?: number): Promise<Result<TerminalStatus>> =>
+      window.evren.terminal.start(cwd, cols, rows),
     stop: (): Promise<Result<true>> => window.evren.terminal.stop(),
     interrupt: (): Promise<Result<true>> => window.evren.terminal.interrupt(),
     write: (data: string): Promise<Result<boolean>> => window.evren.terminal.write(data),
+    ptyWrite: (data: string): Promise<Result<boolean>> => window.evren.terminal.ptyWrite(data),
+    ptyResize: (cols: number, rows: number): Promise<Result<boolean>> =>
+      window.evren.terminal.ptyResize(cols, rows),
     runCode: (
       language: string,
       code: string
@@ -168,6 +172,8 @@ export const api = {
       window.evren.terminal.runCode(language, code),
     onData: (callback: (payload: { data: string }) => void): (() => void) =>
       window.evren.terminal.onData(callback as (payload: unknown) => void),
+    onRaw: (callback: (payload: { data: string }) => void): (() => void) =>
+      window.evren.terminal.onRaw(callback as (payload: unknown) => void),
     onExit: (
       callback: (payload: { code: number | null; signal: string | null }) => void
     ): (() => void) =>

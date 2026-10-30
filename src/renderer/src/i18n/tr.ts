@@ -123,6 +123,10 @@ export const tr = {
   'terminal.start': 'Başlat',
   'terminal.stop': 'Durdur',
   'terminal.cwd': 'Klasör: {path}',
+  'terminal.restart': 'Yeniden başlat',
+  'terminal.interrupt': 'Ctrl+C',
+  'terminal.ready': 'Terminal hazır.',
+  'terminal.inputPlaceholder': 'Komut yazıp Enter’a basın...',
 
   // ---------- ayarlar ----------
   'settings.title': 'Ayarlar',

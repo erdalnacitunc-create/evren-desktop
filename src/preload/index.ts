@@ -92,16 +92,25 @@ export const api = {
   },
   terminal: {
     status: () => ipcRenderer.invoke('terminal:status'),
-    start: (cwd?: string) => ipcRenderer.invoke('terminal:start', cwd),
+    start: (cwd?: string, cols?: number, rows?: number) =>
+      ipcRenderer.invoke('terminal:start', cwd, cols, rows),
     stop: () => ipcRenderer.invoke('terminal:stop'),
     interrupt: () => ipcRenderer.invoke('terminal:interrupt'),
     write: (data: string) => ipcRenderer.invoke('terminal:write', data),
+    ptyWrite: (data: string) => ipcRenderer.invoke('terminal:ptyWrite', data),
+    ptyResize: (cols: number, rows: number) =>
+      ipcRenderer.invoke('terminal:ptyResize', cols, rows),
     runCode: (language: string, code: string) =>
       ipcRenderer.invoke('terminal:runCode', language, code),
     onData: (callback: (payload: unknown) => void) => {
       const listener = (_event: unknown, payload: unknown): void => callback(payload)
       ipcRenderer.on('terminal:data', listener)
       return () => ipcRenderer.removeListener('terminal:data', listener)
+    },
+    onRaw: (callback: (payload: unknown) => void) => {
+      const listener = (_event: unknown, payload: unknown): void => callback(payload)
+      ipcRenderer.on('terminal:raw', listener)
+      return () => ipcRenderer.removeListener('terminal:raw', listener)
     },
     onExit: (callback: (payload: unknown) => void) => {
       const listener = (_event: unknown, payload: unknown): void => callback(payload)

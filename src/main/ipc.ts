@@ -109,6 +109,14 @@ import {
   stageGitPaths,
   unstageGitPaths
 } from './git'
+import {
+  interruptPty,
+  ptyStatus,
+  resizePty,
+  startPty,
+  stopPty,
+  writePty
+} from './pty'
 import { openExternalSafe } from './safeOpen'
 import { getSkillContent, listCommands } from './commands'
 import { learnFromSession } from './memory/extract'
@@ -641,6 +649,8 @@ export function registerIpcHandlers(): void {
 
   registerHandler('terminal:status', async (): Promise<Result<TerminalStatus>> => {
     try {
+      const pty = ptyStatus()
+      if (pty.running || pty.error) return { ok: true, data: pty }
       return { ok: true, data: terminalStatus() }
     } catch (error) {
       return fail(error)
@@ -682,9 +692,45 @@ export function registerIpcHandlers(): void {
 
   registerHandler(
     'terminal:start',
-    async (_event, cwd?: string): Promise<Result<TerminalStatus>> => {
+    async (
+      _event,
+      cwd?: string,
+      cols?: number,
+      rows?: number
+    ): Promise<Result<TerminalStatus>> => {
       try {
-        return { ok: true, data: await startTerminal(cwd ? String(cwd) : undefined) }
+        const status = await startPty({
+          cwd: cwd ? String(cwd) : undefined,
+          cols: typeof cols === 'number' ? cols : undefined,
+          rows: typeof rows === 'number' ? rows : undefined
+        })
+        // PTY yüklenemediyse boru tabanlı yedeğe geç.
+        if (!status.running && status.mode === 'pipe') {
+          return { ok: true, data: await startTerminal(cwd ? String(cwd) : undefined) }
+        }
+        return { ok: true, data: status }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
+  registerHandler(
+    'terminal:ptyWrite',
+    async (_event, data: string): Promise<Result<boolean>> => {
+      try {
+        return { ok: true, data: writePty(String(data ?? '')) }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
+  registerHandler(
+    'terminal:ptyResize',
+    async (_event, cols: number, rows: number): Promise<Result<boolean>> => {
+      try {
+        return { ok: true, data: resizePty(Number(cols), Number(rows)) }
       } catch (error) {
         return fail(error)
       }
@@ -693,6 +739,7 @@ export function registerIpcHandlers(): void {
 
   registerHandler('terminal:stop', async (): Promise<Result<true>> => {
     try {
+      stopPty()
       stopTerminal()
       return { ok: true, data: true }
     } catch (error) {
@@ -702,6 +749,7 @@ export function registerIpcHandlers(): void {
 
   registerHandler('terminal:interrupt', async (): Promise<Result<true>> => {
     try {
+      if (interruptPty()) return { ok: true, data: true }
       interruptTerminal()
       return { ok: true, data: true }
     } catch (error) {

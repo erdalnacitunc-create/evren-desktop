@@ -118,6 +118,10 @@ export const en: Record<TranslationKey, string> = {
   'terminal.start': 'Start',
   'terminal.stop': 'Stop',
   'terminal.cwd': 'Folder: {path}',
+  'terminal.restart': 'Restart',
+  'terminal.interrupt': 'Ctrl+C',
+  'terminal.ready': 'Terminal ready.',
+  'terminal.inputPlaceholder': 'Type a command and press Enter...',
 
   // ---------- settings ----------
   'settings.title': 'Settings',

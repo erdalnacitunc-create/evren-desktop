@@ -149,6 +149,8 @@ export interface TerminalStatus {
   cwd: string | null
   shell: string | null
   error?: string
+  /** 'pty' gerçek terminal, 'pipe' boru tabanlı yedek. */
+  mode?: 'pty' | 'pipe'
 }
 
 export type UpdatePhase =

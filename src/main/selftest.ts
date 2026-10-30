@@ -26,6 +26,7 @@ import { getQuota, listModels } from './api'
 import { streamChat } from './chat'
 import { apiKeySource, loadApiKey, saveApiKey } from './credentials'
 import { getSettings, updateSettings } from './settings'
+import { resizePty, startPty, stopPty, writePty } from './pty'
 import {
   appendMessage,
   createSession,
@@ -55,6 +56,21 @@ export async function runSelfTest(): Promise<void> {
 
   const key = await loadApiKey()
   lines.push(`key_present=${!!key} source=${apiKeySource() ?? 'none'}`)
+
+  // PTY: gerçek terminal oturumu açılıp kapatılır (paketli yapıda da çalışmalı).
+  try {
+    const started = await startPty({ cwd: app.getPath('home'), cols: 80, rows: 24 })
+    lines.push(`pty_mode=${started.mode ?? 'none'} running=${started.running}`)
+    if (started.running) {
+      lines.push(`pty_write=${writePty('\r')}`)
+      lines.push(`pty_resize=${resizePty(100, 30)}`)
+    } else if (started.error) {
+      lines.push(`pty_error=${started.error}`)
+    }
+    stopPty()
+  } catch (error) {
+    lines.push(`pty_error=${error instanceof Error ? error.message : String(error)}`)
+  }
 
   if (key) {
     const settings = await getSettings()

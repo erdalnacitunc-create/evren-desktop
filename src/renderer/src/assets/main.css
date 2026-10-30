@@ -6472,6 +6472,25 @@ kbd {
   word-break: break-word;
 }
 
+.terminal-pty {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 4px 6px 6px;
+  overflow: hidden;
+}
+
+.terminal-pty .xterm {
+  height: 100%;
+}
+
+.terminal-pty .xterm-viewport {
+  background: transparent !important;
+}
+
+.terminal-pty .xterm-screen {
+  height: 100%;
+}
+
 .terminal-input-row {
   flex: 0 0 auto;
   display: flex;

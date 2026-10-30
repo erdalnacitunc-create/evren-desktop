@@ -1,5 +1,5 @@
 import type { MemoryType } from '../../shared/types'
-import { getSession, patchSession } from '../sessionStore'
+import { sessions } from '../sessionRepository'
 import { getSettings } from '../settings'
 import { embedTexts } from './embed'
 import { addMemory, listMemories } from './store'
@@ -56,7 +56,7 @@ export async function learnFromSession(
   baseUrl: string,
   apiKey: string
 ): Promise<{ added: number; skipped?: string }> {
-  const session = await getSession(sessionId)
+  const session = await (await sessions()).get(sessionId)
   if (!session) return { added: 0, skipped: 'session-not-found' }
 
   const settings = await getSettings()
@@ -160,7 +160,7 @@ export async function learnFromSession(
   )
 
   if (fresh.length === 0) {
-    await patchSession(sessionId, { lastMemoryLearnCount: session.messages.length })
+    await (await sessions()).patch(sessionId, { lastMemoryLearnCount: session.messages.length })
     return { added: 0, skipped: 'no-new-memories' }
   }
 
@@ -186,6 +186,6 @@ export async function learnFromSession(
     })
   }
 
-  await patchSession(sessionId, { lastMemoryLearnCount: session.messages.length })
+  await (await sessions()).patch(sessionId, { lastMemoryLearnCount: session.messages.length })
   return { added: fresh.length }
 }

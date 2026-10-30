@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { Session, SessionSummary, StoredMessage, TodoItem } from '../shared/types'
+import type { SessionRepository } from './sessionRepository'
 import { createLogger } from './logger'
 
 const log = createLogger('sessionStore')
@@ -187,4 +188,22 @@ export async function __resetCacheForTests(): Promise<void> {
 /** Yalnızca testler için: bekleyen yazmaların bitmesini bekler. */
 export async function __flushWritesForTests(): Promise<void> {
   await writeChain
+}
+
+/**
+ * Arayüz uygulaması. Süreç ayrımında bu nesnenin yerini uzak bir taşıyıcı alır.
+ * Fonksiyonlar bilinçli olarak geç yüklenir (hoisted), böylece modül yüklenirken
+ * döngüsel import sorunu çıkmaz.
+ */
+export const localSessionRepository: SessionRepository = {
+  list: () => listSessions(),
+  search: (query: string) => searchSessions(query),
+  get: (id: string) => getSession(id),
+  create: (modelId: string) => createSession(modelId),
+  appendMessage: (sessionId: string, message: StoredMessage) => appendMessage(sessionId, message),
+  patch: (sessionId: string, patch: Partial<Session>) => patchSession(sessionId, patch),
+  setModel: (sessionId: string, modelId: string) => setSessionModel(sessionId, modelId),
+  setTodos: (sessionId: string, todos: TodoItem[]) => setSessionTodos(sessionId, todos),
+  rename: (sessionId: string, title: string) => renameSession(sessionId, title),
+  remove: (sessionId: string) => deleteSession(sessionId)
 }

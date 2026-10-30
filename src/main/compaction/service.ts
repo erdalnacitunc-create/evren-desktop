@@ -1,5 +1,5 @@
 import type { CompactionResult } from '../../shared/types'
-import { getSession, patchSession } from '../sessionStore'
+import { sessions } from '../sessionRepository'
 import { getSettings } from '../settings'
 
 function contentText(content: unknown): string {
@@ -30,7 +30,7 @@ export async function compactSession(
   apiKey: string,
   focus?: string
 ): Promise<CompactionResult> {
-  const session = await getSession(sessionId)
+  const session = await (await sessions()).get(sessionId)
   if (!session) return { compacted: false, reason: 'Oturum bulunamadı.' }
 
   const settings = await getSettings()
@@ -134,7 +134,7 @@ export async function compactSession(
   }
 
   const compactedAt = Date.now()
-  await patchSession(sessionId, {
+  await (await sessions()).patch(sessionId, {
     summary: summary.trim(),
     summaryMessageCount: split,
     compactedAt

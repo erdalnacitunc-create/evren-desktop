@@ -17,6 +17,7 @@ import {
 } from 'path'
 import { promisify } from 'util'
 import { getSettings, updateSettings } from './settings'
+import { sessions } from './sessionRepository'
 import { withAndroidPath } from './android'
 import { extractPdfText } from './pdf'
 import type {
@@ -256,8 +257,8 @@ export async function ensureAgentWorkspace(sessionId?: string): Promise<string |
 
   if (sessionId) {
     try {
-      const store = await import('./sessionStore')
-      await store.patchSession(sessionId, {
+      const store = await sessions()
+      await store.patch(sessionId, {
         workspacePath: created.path,
         workspaceTemporary: true
       })

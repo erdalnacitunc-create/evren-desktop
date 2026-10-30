@@ -36,7 +36,7 @@ import { detectProjectChecks, runProjectChecks, formatWorkspaceFile } from '../c
 import { buildRepoMap } from '../repoMap'
 import { searchCodeIndex } from '../codeIndex'
 import { getSettings } from '../settings'
-import { listSessions, renameSession, searchSessions } from '../sessionStore'
+import { sessions } from '../sessionRepository'
 import {
   listReferenceDirectory,
   listReferences,
@@ -1568,11 +1568,11 @@ export function createTools(options: {
     execute: async (args, ctx) => {
       const action = str(args.action)
       if (action === 'list') {
-        const sessions = await listSessions()
+        const items = await (await sessions()).list()
         return {
           ok: true,
           content: JSON.stringify(
-            sessions.slice(0, 80).map((session) => ({
+            items.slice(0, 80).map((session) => ({
               id: session.id,
               title: session.title,
               updatedAt: session.updatedAt,
@@ -1586,11 +1586,11 @@ export function createTools(options: {
       if (action === 'search') {
         const query = str(args.query).trim()
         if (!query) return { ok: false, content: 'search için query gerekli.' }
-        const sessions = await searchSessions(query)
+        const items = await (await sessions()).search(query)
         return {
           ok: true,
           content: JSON.stringify(
-            sessions.slice(0, 40).map((session) => ({
+            items.slice(0, 40).map((session) => ({
               id: session.id,
               title: session.title,
               updatedAt: session.updatedAt
@@ -1604,7 +1604,7 @@ export function createTools(options: {
         if (!ctx.sessionId) return { ok: false, content: 'Aktif oturum bulunamadı.' }
         const title = str(args.title).trim()
         if (!title) return { ok: false, content: 'rename için title gerekli.' }
-        const session = await renameSession(ctx.sessionId, title)
+        const session = await (await sessions()).rename(ctx.sessionId, title)
         if (!session) return { ok: false, content: 'Oturum yeniden adlandırılamadı.' }
         return { ok: true, content: `Oturum yeniden adlandırıldı: ${session.title}` }
       }

@@ -16,7 +16,7 @@ import {
   getWorkspaceRoot,
   runWithWorkspace
 } from './workspace'
-import { getSession } from './sessionStore'
+import { sessions } from './sessionRepository'
 import { buildMemoryContext } from './memory/retrieve'
 import { streamCompletion } from './sse'
 import { buildBaseBody, toErrorEvent } from './chatShared'
@@ -99,8 +99,8 @@ function createTrackingSend(
   const persist = async (finishReason: string | null): Promise<void> => {
     if (!sessionId) return
     try {
-      const store = await import('./sessionStore')
-      const existing = await store.getSession(sessionId)
+      const store = await sessions()
+      const existing = await store.get(sessionId)
       const duplicate = existing?.messages.some(
         (message) => message.requestId === requestId
       )
@@ -164,7 +164,7 @@ export async function startChat(
   )
 
   // Oturum kendi çalışma alanıyla çalışır; paralel sohbetler birbirini etkilemez.
-  const session = payload.sessionId ? await getSession(payload.sessionId) : null
+  const session = payload.sessionId ? await (await sessions()).get(payload.sessionId) : null
   const workspaceRoot =
     payload.agent?.enabled && settings.workspaceTools !== false
       ? session?.workspacePath && (await pathExists(session.workspacePath))

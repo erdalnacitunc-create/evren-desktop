@@ -4,7 +4,7 @@ import { loadApiKey } from '../credentials'
 import { loadEnabledSkills } from '../extensions'
 import { getAgentMcpTools } from '../mcp/manager'
 import { getAgentPluginTools } from '../plugins/manager'
-import { getSession } from '../sessionStore'
+import { sessions } from '../sessionRepository'
 import { streamCompletion } from '../sse'
 import { getSettings } from '../settings'
 import { getWorkspaceRoot } from '../workspace'
@@ -474,7 +474,7 @@ setSubagentResumeHandler(async (info, controller) => {
   if (!apiKey) throw new Error('API anahtarı bulunamadı; görev sürdürülemedi.')
   let model = info.model
   if (!model && info.sessionId) {
-    model = (await getSession(info.sessionId))?.modelId
+    model = (await (await sessions()).get(info.sessionId))?.modelId
   }
   if (!model) {
     const models = await listModels(settings.baseUrl, apiKey)

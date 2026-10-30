@@ -21,6 +21,12 @@ import { buildMemoryContext } from './memory/retrieve'
 import { streamCompletion } from './sse'
 import { buildBaseBody, toErrorEvent } from './chatShared'
 import type { ChatEvent, ChatRequest, ChatUsage } from '../shared/types'
+import {
+  applyStreamEvent,
+  belongsToRequest,
+  emptyStreamState,
+  type StreamState
+} from './chatStreamTracker'
 
 const controllers = new Map<string, AbortController>()
 /**
@@ -76,28 +82,21 @@ export function emitChatEvent(webContentsId: number, event: ChatEvent): void {
   }
 }
 
-interface StreamAccumulator {
-  content: string
-  reasoning: string
-  usage?: ChatUsage
-  persisted: boolean
-}
-
 /**
  * Asistan yanıtını ana süreçte biriktirip, akış bitince oturuma kaydeder.
  * Renderer sekme değiştirdiğinde veya kapandığında yanıt kaybolmaz.
+ *
+ * Biriktirme mantığı `chatStreamTracker.ts` içindedir (saf, test edilebilir).
  */
 function createTrackingSend(
   requestId: string,
   webContentsId: number,
   sessionId: string | undefined
 ): (event: ChatEvent) => void {
-  const acc: StreamAccumulator = { content: '', reasoning: '', persisted: false }
+  let state: StreamState = emptyStreamState()
 
   const persist = async (finishReason: string | null): Promise<void> => {
-    if (acc.persisted || !sessionId) return
-    if (!acc.content.trim() && !acc.reasoning.trim()) return
-    acc.persisted = true
+    if (!sessionId) return
     try {
       const store = await import('./sessionStore')
       const existing = await store.getSession(sessionId)
@@ -108,10 +107,10 @@ function createTrackingSend(
       await store.appendMessage(sessionId, {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: acc.content,
-        reasoning: acc.reasoning || undefined,
+        content: state.content,
+        reasoning: state.reasoning || undefined,
         createdAt: Date.now(),
-        usage: acc.usage,
+        usage: state.usage,
         finishReason,
         requestId
       })
@@ -121,15 +120,13 @@ function createTrackingSend(
   }
 
   return (event: ChatEvent): void => {
-    if (event.requestId !== requestId) {
+    if (!belongsToRequest(event, requestId)) {
       emitChatEvent(webContentsId, event)
       return
     }
-    if (event.type === 'content') acc.content += event.text
-    else if (event.type === 'reasoning') acc.reasoning += event.text
-    else if (event.type === 'usage') acc.usage = event.usage
-    else if (event.type === 'done') void persist(event.finishReason)
-    else if (event.type === 'error') void persist(null)
+    const result = applyStreamEvent(state, event)
+    state = result.state
+    if (result.persist) void persist(result.persist.finishReason)
     emitChatEvent(webContentsId, event)
   }
 }

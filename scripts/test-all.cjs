@@ -32,7 +32,8 @@ const SUITES = [
   { file: 'scripts/workspace-scope-test.ts', label: 'Çalışma alanı kapsamı' },
   { file: 'scripts/event-sink-test.ts', label: 'Olay çıkış noktası', fast: true },
   { file: 'scripts/session-repository-test.ts', label: 'Oturum deposu arayüzü' },
-  { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' }
+  { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' },
+  { file: 'scripts/agent-concurrency-test.ts', label: 'Eşzamanlı ajan koşuları' }
 ]
 
 const args = process.argv.slice(2)

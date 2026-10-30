@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import type { AppSettings, KeyStatus, ModelInfo, ThemeMode } from '@shared/types'
+import type { AppSettings, KeyStatus, Locale, ModelInfo, ThemeMode } from '@shared/types'
 import { api } from '../lib/ipc'
+import { LOCALES, LOCALE_LABELS, useI18n } from '../i18n'
 import { ExtensionsPanel } from './ExtensionsPanel'
 import { GithubAccountPanel } from './GithubAccountPanel'
 import { HeadlessPanel } from './HeadlessPanel'
@@ -54,6 +55,7 @@ export function SettingsModal({
     | 'mcp'
     | 'api'
   >(initialTab ?? 'general')
+  const { t } = useI18n()
 
   async function saveBaseUrl(): Promise<void> {
     setBusy(true)
@@ -115,7 +117,23 @@ export function SettingsModal({
     if (!result.ok) setError(result.error)
   }
 
-  async function saveTheme(theme: ThemeMode): Promise<void> {    setBusy(true)
+  async function saveLocale(next: Locale): Promise<void> {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await api.settings.update({ locale: next })
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      onSaved(result.data)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveTheme(theme: ThemeMode): Promise<void> {
+    setBusy(true)
     setError(null)
     try {
       const result = await api.settings.update({ theme })
@@ -150,13 +168,13 @@ export function SettingsModal({
         className={`modal ${tab !== 'general' ? 'modal-wide' : ''}`}
         role="dialog"
         aria-modal="true"
-        aria-label="Ayarlar"
+        aria-label={t('settings.title')}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
-          <h2>Ayarlar</h2>
+          <h2>{t('settings.title')}</h2>
           <button className="btn-ghost" onClick={onClose}>
-            Kapat
+            {t('common.close')}
           </button>
         </div>
 
@@ -165,25 +183,25 @@ export function SettingsModal({
             className={tab === 'general' ? 'active' : ''}
             onClick={() => setTab('general')}
           >
-            Genel
+            {t('settings.tab.general')}
           </button>
           <button
             className={tab === 'extensions' ? 'active' : ''}
             onClick={() => setTab('extensions')}
           >
-            Uzantılar
+            {t('settings.tab.extensions')}
           </button>
           <button
             className={tab === 'memory' ? 'active' : ''}
             onClick={() => setTab('memory')}
           >
-            Hafıza
+            {t('settings.tab.memory')}
           </button>
           <button
             className={tab === 'references' ? 'active' : ''}
             onClick={() => setTab('references')}
           >
-            Referanslar
+            {t('settings.tab.references')}
           </button>
           <button
             className={tab === 'github' ? 'active' : ''}
@@ -195,7 +213,7 @@ export function SettingsModal({
             className={tab === 'scheduled' ? 'active' : ''}
             onClick={() => setTab('scheduled')}
           >
-            Görevler
+            {t('settings.tab.scheduled')}
           </button>
           <button className={tab === 'mcp' ? 'active' : ''} onClick={() => setTab('mcp')}>
             MCP
@@ -223,9 +241,9 @@ export function SettingsModal({
           ) : (
             <>
           <section className="settings-section">
-            <h3>Bağlantı</h3>
+            <h3>{t('settings.connection')}</h3>
             <label className="field">
-              <span>Sunucu adresi</span>
+              <span>{t('settings.serverUrl')}</span>
               <input
                 type="text"
                 value={baseUrl}
@@ -240,16 +258,16 @@ export function SettingsModal({
                 onClick={() => setBaseUrl(DEFAULT_BASE_URL)}
                 disabled={busy}
               >
-                Varsayılana dön
+                {t('settings.resetDefaultUrl')}
               </button>
               <button className="btn" onClick={() => void saveBaseUrl()} disabled={busy}>
-                Kaydet
+                {t('common.save')}
               </button>
             </div>
           </section>
 
           <section className="settings-section">
-            <h3>Görünüm</h3>
+            <h3>{t('settings.appearance')}</h3>
             <div className="segmented">
               {(['dark', 'light', 'system'] as ThemeMode[]).map((theme) => (
                 <button
@@ -258,23 +276,42 @@ export function SettingsModal({
                   onClick={() => void saveTheme(theme)}
                   disabled={busy}
                 >
-                  {theme === 'dark' ? 'Koyu' : theme === 'light' ? 'Açık' : 'Sistem'}
+                  {theme === 'dark'
+                    ? t('settings.theme.dark')
+                    : theme === 'light'
+                      ? t('settings.theme.light')
+                      : t('settings.theme.system')}
                 </button>
               ))}
             </div>
-            <p className="params-note">
-              Sistem seçeneği Windows açık/koyu tema tercihini izler.
-            </p>
+            <p className="params-note">{t('settings.theme.note')}</p>
           </section>
 
           <section className="settings-section">
-            <h3>API anahtarı</h3>
+            <h3>{t('settings.language')}</h3>
+            <div className="segmented">
+              {LOCALES.map((locale) => (
+                <button
+                  key={locale}
+                  className={`${(settings.locale ?? 'tr') === locale ? 'active' : ''}`}
+                  onClick={() => void saveLocale(locale)}
+                  disabled={busy}
+                >
+                  {LOCALE_LABELS[locale]}
+                </button>
+              ))}
+            </div>
+            <p className="params-note">{t('settings.language.note')}</p>
+          </section>
+
+          <section className="settings-section">
+            <h3>{t('settings.apiKey')}</h3>
             <p className="muted">
-              Saklanan anahtar: <code>{keyStatus?.hint ?? '—'}</code>
-              {keyStatus?.source === 'env' && ' (ortam değişkeninden)'}
+              {t('settings.storedKey')} <code>{keyStatus?.hint ?? '—'}</code>
+              {keyStatus?.source === 'env' && ` ${t('settings.fromEnv')}`}
             </p>
             <label className="field">
-              <span>Yeni anahtar (değiştirmek için)</span>
+              <span>{t('settings.newKey')}</span>
               <input
                 type="password"
                 value={keyInput}
@@ -290,33 +327,29 @@ export function SettingsModal({
                 onClick={() => void clearKey()}
                 disabled={busy}
               >
-                Anahtarı sil
+                {t('settings.deleteKey')}
               </button>
               <button
                 className="btn"
                 onClick={() => void saveKey()}
                 disabled={busy || !keyInput.trim()}
               >
-                Doğrula ve kaydet
+                {t('settings.validateAndSave')}
               </button>
             </div>
           </section>
 
           <section className="settings-section">
-            <h3>Güncellemeler</h3>
+            <h3>{t('update.title')}</h3>
             <UpdatePanel />
           </section>
 
           <section className="settings-section">
-            <h3>Günlükler</h3>
-            <p className="muted">
-              Hata ve başlatma kayıtları kullanıcı verisi klasöründeki <code>logs</code> dizininde
-              tutulur. Dosya 5 MB'a ulaşınca döner; API anahtarı ve token gibi değerler yazılmadan
-              önce maskelenir.
-            </p>
+            <h3>{t('settings.logs')}</h3>
+            <p className="muted">{t('settings.logs.note')}</p>
             <div className="inline-actions">
               <button className="btn-ghost" onClick={() => void openLogs()}>
-                Günlük klasörünü aç
+                {t('settings.openLogFolder')}
               </button>
             </div>
           </section>

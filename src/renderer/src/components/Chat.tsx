@@ -40,6 +40,7 @@ import {
   type PromptHistory
 } from '../lib/promptHistory'
 import { PERMISSION_LABELS } from '@shared/permissions'
+import { useI18n } from '../i18n'
 import { CommandPalette } from './CommandPalette'
 import { ReviewPane } from './ReviewPane'
 import { WorkspacePanel } from './WorkspacePanel'
@@ -356,6 +357,7 @@ export function Chat({
   onTodosChange,
   onSettingsChanged
 }: Props): React.JSX.Element {
+  const { t } = useI18n()
   const [items, setItems] = useState<Item[]>(
     initialMessages.map((message) => ({ kind: 'message', ...message }))
   )
@@ -1400,7 +1402,7 @@ export function Chat({
 
     if (streaming) {
       if (text.startsWith('/')) {
-        setNotice('Yanıt sürerken komut çalıştırılamaz.')
+        setNotice(t('composer.commandWhileStreaming'))
         return
       }
       const target = requestRef.current
@@ -1410,14 +1412,14 @@ export function Chat({
         if (result.ok && result.data.queued) {
           setInput('')
           setSteeringCount(result.data.pending)
-          setNotice('Mesajınız ajanın sıradaki adımında iletilecek.')
+          setNotice(t('composer.steeringNotice'))
           return
         }
       }
       // Düz akışta mesaj sıraya alınır, yanıt bitince gönderilir.
       setQueue((prev) => [...prev, { id: crypto.randomUUID(), text }])
       setInput('')
-      setNotice('Yanıt sürüyor; mesaj sıraya alındı.')
+      setNotice(t('composer.queuedNotice'))
       return
     }
 
@@ -1452,7 +1454,8 @@ export function Chat({
     model.id,
     multiverse,
     sendPrompt,
-    streaming
+    streaming,
+    t
   ])
 
   const sendSuggestion = useCallback(
@@ -1537,9 +1540,9 @@ export function Chat({
     setStreaming(false)
     requestRef.current = null
     setSteeringCount(0)
-    if (queue.length > 0) setNotice(`${queue.length} sıradaki istem iptal edildi.`)
+    if (queue.length > 0) setNotice(t('composer.queueDropped', { count: queue.length }))
     setQueue([])
-  }, [queue.length])
+  }, [queue.length, t])
 
   const respondApproval = useCallback(
     async (approved: boolean, always = false): Promise<void> => {
@@ -2375,7 +2378,7 @@ export function Chat({
           <div className="composer-queue">
             {steeringCount > 0 && (
               <span className="queue-badge steering">
-                {steeringCount} mesaj ajanın sıradaki adımında iletilecek
+                {t('composer.steeringPending', { count: steeringCount })}
               </span>
             )}
             {queue.map((item, index) => (
@@ -2386,7 +2389,7 @@ export function Chat({
                 </span>
                 <button
                   className="attach-remove"
-                  title="Sıradan çıkar"
+                  title={t('composer.removeFromQueue')}
                   onClick={() =>
                     setQueue((prev) => prev.filter((entry) => entry.id !== item.id))
                   }
@@ -2406,7 +2409,7 @@ export function Chat({
                 <button
                   className="attach-remove"
                   onClick={() => removeAttachment(attachment.id)}
-                  title="Eki kaldır"
+                  title={t('composer.attachRemove')}
                 >
                   ×
                 </button>
@@ -2436,15 +2439,15 @@ export function Chat({
           placeholder={
             streaming
               ? agent.enabled && !multiverse.enabled
-                ? 'Araya girin: ajanın sıradaki adımında iletilir...'
-                : 'Yanıt sürerken yazabilirsiniz; mesaj sıraya alınır...'
+                ? t('composer.placeholder.steer')
+                : t('composer.placeholder.queue')
               : approval
-                ? 'Ajan onay bekliyor...'
+                ? t('composer.placeholder.approval')
                 : profile === 'plan'
-                  ? 'Plan modu: incele, analiz et, plan çıkar...'
+                  ? t('composer.placeholder.plan')
                   : multiverse.enabled
-                    ? 'Çoklu Evren için mesajınızı yazın...'
-                    : 'Mesajınızı yazın...'
+                    ? t('composer.placeholder.multiverse')
+                    : t('composer.placeholder')
           }
           rows={3}
         />
@@ -2456,7 +2459,7 @@ export function Chat({
                   className="btn-ghost"
                   disabled={!canGoBack(seededHistory)}
                   onClick={recallOlderPrompt}
-                  title="Önceki istem (Alt+↑)"
+                  title={t('composer.previousPrompt')}
                 >
                   ↶
                 </button>
@@ -2464,7 +2467,7 @@ export function Chat({
                   className="btn-ghost"
                   disabled={!canGoForward(seededHistory)}
                   onClick={recallNewerPrompt}
-                  title="Sonraki istem (Alt+↓)"
+                  title={t('composer.nextPrompt')}
                 >
                   ↷
                 </button>
@@ -2479,7 +2482,7 @@ export function Chat({
                 bağlam: {contextPercent.toFixed(0)}%
               </span>
             )}
-            {compacting && <span className="context-meter">sıkıştırılıyor...</span>}
+            {compacting && <span className="context-meter">{t('composer.compacting')}</span>}
             {usage
               ? `${formatNumber(usage.prompt_tokens ?? null)} girdi · ${formatNumber(
                   usage.completion_tokens ?? null
@@ -2499,15 +2502,17 @@ export function Chat({
                     : 'Yanıt bitince gönder'
                 }
               >
-                {agent.enabled && !multiverse.enabled ? 'Araya gir' : 'Sıraya al'}
+                {agent.enabled && !multiverse.enabled
+                  ? t('composer.steer')
+                  : t('composer.queue')}
               </button>
               <button className="btn btn-stop" onClick={() => void stop()}>
-                Durdur
+                {t('composer.stop')}
               </button>
             </div>
           ) : (
             <button className="btn" onClick={() => void send()} disabled={!input.trim()}>
-              Gönder
+              {t('composer.send')}
             </button>
           )}
         </div>

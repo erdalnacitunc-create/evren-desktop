@@ -2,7 +2,7 @@
 import { app } from 'electron'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { getSettings } from '../src/main/settings'
+import { getSettings, updateSettings } from '../src/main/settings'
 
 /**
  * İzin kurallarının ayar dosyasından yüklenirken doğrulanmasını test eder.
@@ -17,6 +17,7 @@ writeFileSync(
   join(dataDir, 'settings.json'),
   JSON.stringify({
     baseUrl: 'https://example.invalid',
+    locale: 'en',
     permissions: {
       execute: 'allow',
       rules: [
@@ -47,7 +48,11 @@ app.whenReady().then(async () => {
   check('kategori korunur', rules[1]?.category, 'edit')
   check('not kırpılır', rules[1]?.note, 'kısa not')
   check('kategori varsayılanı korunur', settings.permissions?.execute, 'allow')
+  check('dil ayarı korunur', settings.locale, 'en')
 
-  console.log(`TOTAL=5 FAILED=${failed}`)
+  const invalid = await updateSettings({ locale: 'de' as never })
+  check('geçersiz dil yazılmaz', invalid.locale, undefined)
+
+  console.log(`TOTAL=7 FAILED=${failed}`)
   app.exit(failed === 0 ? 0 : 1)
 })

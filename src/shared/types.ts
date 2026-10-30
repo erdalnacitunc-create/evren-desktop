@@ -179,6 +179,8 @@ export interface ReferenceDirectory {
 export interface AppSettings extends ChatDefaults {
   baseUrl: string
   theme?: ThemeMode
+  /** Arayüz dili. Varsayılan: tr */
+  locale?: Locale
   agentMode?: AgentMode
   browserTools?: boolean
   computerTools?: boolean
@@ -235,6 +237,8 @@ export interface ChatMessage {
 export type AgentMode = 'confirm' | 'auto'
 export type AgentProfile = 'build' | 'plan'
 export type ThemeMode = 'dark' | 'light' | 'system'
+/** Arayüz dilleri. Yeni dil eklendiğinde renderer sözlüğü de eklenmelidir. */
+export type Locale = 'tr' | 'en'
 export type SubagentType = 'explore' | 'review' | 'general'
 export type SubagentTaskStatus = 'running' | 'done' | 'error' | 'cancelled' | 'interrupted'
 

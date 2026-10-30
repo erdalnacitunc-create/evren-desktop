@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../lib/ipc'
+import { useI18n } from '../i18n'
 import { EvrenLogo } from './EvrenLogo'
 import { WindowControls } from './WindowControls'
 
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function Onboarding({ encryptionAvailable, notice, onComplete }: Props): React.JSX.Element {
+  const { t } = useI18n()
   const [key, setKey] = useState('')
   const [show, setShow] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -52,16 +54,13 @@ export function Onboarding({ encryptionAvailable, notice, onComplete }: Props): 
         <div className="brand brand-lg">
           <EvrenLogo size={48} className="evren-logo" />
           <div>
-            <h1>EVREN Desktop</h1>
-            <p>Savunma Sanayii Yapay Zeka Platformu</p>
+            <h1>{t('onboarding.title')}</h1>
+            <p>{t('brand.tagline')}</p>
           </div>
         </div>
 
-        <h2>EVREN'e bağlan</h2>
-        <p className="muted">
-          Resmi panelden aldığınız API anahtarını girin. Anahtar cihazınızda Windows
-          DPAPI ile şifrelenerek saklanır ve yalnızca ana süreçte tutulur.
-        </p>
+        <h2>{t('onboarding.connect')}</h2>
+        <p className="muted">{t('onboarding.description')}</p>
 
         {notice && <p className="error">{notice}</p>}
 
@@ -71,18 +70,18 @@ export function Onboarding({ encryptionAvailable, notice, onComplete }: Props): 
           target="_blank"
           rel="noreferrer"
         >
-          API anahtarı almak için paneli aç ↗
+          {t('onboarding.openPanel')}
         </a>
 
         <form onSubmit={handleSubmit} className="key-form">
           <label className="field">
-            <span>API anahtarı</span>
+            <span>{t('onboarding.keyLabel')}</span>
             <div className="input-row">
               <input
                 type={show ? 'text' : 'password'}
                 value={key}
                 onChange={(e) => setKey(e.target.value)}
-                placeholder="evren_..."
+                placeholder={t('onboarding.keyPlaceholder')}
                 autoComplete="off"
                 spellCheck={false}
                 required
@@ -93,32 +92,26 @@ export function Onboarding({ encryptionAvailable, notice, onComplete }: Props): 
                 onClick={() => setShow((s) => !s)}
                 tabIndex={-1}
               >
-                {show ? 'Gizle' : 'Göster'}
+                {show ? t('onboarding.hide') : t('onboarding.show')}
               </button>
             </div>
           </label>
 
           {!encryptionAvailable && (
-            <p className="warn">
-              Bu sistemde güvenli saklama (DPAPI) kullanılamıyor; anahtar kalıcı olarak
-              kaydedilemez.
-            </p>
+            <p className="warn">{t('onboarding.encryptionUnavailable')}</p>
           )}
 
           {error && <p className="error">{error}</p>}
           {found !== null && !error && (
-            <p className="ok">Doğrulandı — {found} model bulundu.</p>
+            <p className="ok">{t('onboarding.validated', { count: found })}</p>
           )}
 
           <button className="btn btn-block" type="submit" disabled={busy || !key.trim()}>
-            {busy ? 'Doğrulanıyor...' : 'Doğrula ve kaydet'}
+            {busy ? t('onboarding.validating') : t('onboarding.validateAndSave')}
           </button>
         </form>
 
-        <p className="fineprint">
-          Anahtarınız bu uygulama dışında hiçbir yere gönderilmez; yalnızca
-          evren-llmapi.ssyz.org.tr ile konuşur.
-        </p>
+        <p className="fineprint">{t('onboarding.fineprint')}</p>
       </div>
     </div>
   )

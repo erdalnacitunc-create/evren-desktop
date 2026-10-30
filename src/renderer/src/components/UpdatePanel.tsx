@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { UpdateStatus } from '@shared/types'
 import { api } from '../lib/ipc'
+import { useI18n, type TranslationKey } from '../i18n'
 
-const PHASE_LABELS: Record<UpdateStatus['phase'], string> = {
-  disabled: 'Devre dışı',
-  idle: 'Hazır',
-  checking: 'Kontrol ediliyor...',
-  available: 'Yeni sürüm var',
-  'not-available': 'Güncel',
-  downloading: 'İndiriliyor...',
-  downloaded: 'İndirildi',
-  error: 'Hata'
+const PHASE_KEYS: Record<UpdateStatus['phase'], TranslationKey> = {
+  disabled: 'update.phase.disabled',
+  idle: 'update.phase.idle',
+  checking: 'update.phase.checking',
+  available: 'update.phase.available',
+  'not-available': 'update.phase.notAvailable',
+  downloading: 'update.phase.downloading',
+  downloaded: 'update.phase.downloaded',
+  error: 'update.phase.error'
 }
 
 export function UpdatePanel(): React.JSX.Element {
+  const { t } = useI18n()
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -58,32 +60,32 @@ export function UpdatePanel(): React.JSX.Element {
     if (!result.ok) setError(result.error)
   }, [])
 
-  if (!status) return <p className="muted">Güncelleme durumu yükleniyor...</p>
+  if (!status) return <p className="muted">{t('update.statusLoading')}</p>
 
   return (
     <div className="update-panel">
       <div className="update-row">
         <div>
           <strong>EVREN Desktop {status.currentVersion}</strong>
-          <span className="muted">{PHASE_LABELS[status.phase]}</span>
+          <span className="muted">{t(PHASE_KEYS[status.phase])}</span>
         </div>
         <button
           className="btn-ghost"
           onClick={() => void check()}
           disabled={busy || !status.canCheck}
         >
-          Güncelleme kontrol et
+          {t('update.checkShort')}
         </button>
       </div>
 
       {status.phase === 'available' && (
         <div className="update-box">
-          <strong>Yeni sürüm: {status.version}</strong>
+          <strong>{t('update.available', { version: status.version ?? '' })}</strong>
           {status.releaseNotes && (
             <pre className="update-notes">{status.releaseNotes.slice(0, 3000)}</pre>
           )}
           <button className="btn" onClick={() => void download()} disabled={busy}>
-            Güncellemeyi indir
+            {t('update.downloadShort')}
           </button>
         </div>
       )}
@@ -93,15 +95,17 @@ export function UpdatePanel(): React.JSX.Element {
           <div className="update-progress">
             <div style={{ width: `${status.percent ?? 0}%` }} />
           </div>
-          <span className="muted">%{Math.round(status.percent ?? 0)}</span>
+          <span className="muted">
+            {t('update.downloading', { percent: Math.round(status.percent ?? 0) })}
+          </span>
         </div>
       )}
 
       {status.phase === 'downloaded' && (
         <div className="update-box">
-          <strong>{status.version} indirildi.</strong>
+          <strong>{t('update.downloaded', { version: status.version ?? '' })}</strong>
           <button className="btn" onClick={() => void install()}>
-            Yeniden başlat ve kur
+            {t('update.install')}
           </button>
         </div>
       )}
@@ -111,10 +115,7 @@ export function UpdatePanel(): React.JSX.Element {
       )}
       {error && <div className="ws-error">{error}</div>}
 
-      <p className="muted update-hint">
-        Güncellemeler GitHub Releases üzerinden alınır. İmzalı sürümlerde Windows
-        yayıncı doğrulaması kullanılır; beta kanalı etkin.
-      </p>
+      <p className="muted update-hint">{t('update.note')}</p>
     </div>
   )
 }

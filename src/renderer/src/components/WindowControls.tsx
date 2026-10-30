@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/ipc'
+import { useI18n } from '../i18n'
 
 interface Props {
   className?: string
 }
 
 export function WindowControls({ className = '' }: Props): React.JSX.Element | null {
+  const { t } = useI18n()
   const [maximized, setMaximized] = useState(false)
   const isMac = api.platform === 'darwin'
 
@@ -19,13 +21,15 @@ export function WindowControls({ className = '' }: Props): React.JSX.Element | n
 
   if (isMac) return null
 
+  const maximizeLabel = maximized ? t('window.restore') : t('window.maximize')
+
   return (
     <div className={`window-controls ${className}`}>
       <button
         className="window-control"
         onClick={() => void api.appWindow.minimize()}
-        title="Küçült"
-        aria-label="Küçült"
+        title={t('window.minimize')}
+        aria-label={t('window.minimize')}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <path d="M2 5h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -38,8 +42,8 @@ export function WindowControls({ className = '' }: Props): React.JSX.Element | n
             if (result.ok) setMaximized(result.data)
           })
         }
-        title={maximized ? 'Geri yükle' : 'Büyüt'}
-        aria-label={maximized ? 'Geri yükle' : 'Büyüt'}
+        title={maximizeLabel}
+        aria-label={maximizeLabel}
       >
         {maximized ? (
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
@@ -71,8 +75,8 @@ export function WindowControls({ className = '' }: Props): React.JSX.Element | n
       <button
         className="window-control window-close"
         onClick={() => void api.appWindow.close()}
-        title="Kapat"
-        aria-label="Kapat"
+        title={t('window.close')}
+        aria-label={t('window.close')}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <path

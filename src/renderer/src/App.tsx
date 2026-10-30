@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { AppSettings, KeyStatus, McpElicitationRequest, ModelInfo, QuotaStatus } from '@shared/types'
 import { api } from './lib/ipc'
 import { applyTheme } from './lib/theme'
+import { DEFAULT_LOCALE, isLocale, setLocale } from './i18n'
 import { McpElicitationModal } from './components/McpElicitationModal'
 import { Onboarding } from './components/Onboarding'
 import { Workspace } from './components/Workspace'
@@ -64,6 +65,11 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     applyTheme(settings.theme)
   }, [settings.theme])
+
+  // Dil ayarlardan gelir; yoksa Türkçe.
+  useEffect(() => {
+    setLocale(isLocale(settings.locale) ? settings.locale : DEFAULT_LOCALE)
+  }, [settings.locale])
 
   useEffect(() => {
     if (settings.theme !== 'system') return

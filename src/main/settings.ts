@@ -83,6 +83,9 @@ function normalize(input: Partial<AppSettings>): AppSettings {
   if (input.theme === 'dark' || input.theme === 'light' || input.theme === 'system') {
     result.theme = input.theme as ThemeMode
   }
+  if (input.locale === 'tr' || input.locale === 'en') {
+    result.locale = input.locale
+  }
   if (typeof input.browserTools === 'boolean') result.browserTools = input.browserTools
   if (typeof input.computerTools === 'boolean') result.computerTools = input.computerTools
   if (typeof input.workspaceTools === 'boolean') result.workspaceTools = input.workspaceTools

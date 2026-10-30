@@ -944,6 +944,27 @@ input {
 .composer-actions .meta {
   font-size: 11px;
   color: #6b7d99;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.composer-history {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.composer-history .btn-ghost {
+  padding: 1px 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 6px;
+}
+
+.composer-history .btn-ghost:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .btn-stop {

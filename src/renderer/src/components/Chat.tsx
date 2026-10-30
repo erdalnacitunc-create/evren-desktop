@@ -29,6 +29,16 @@ import {
   registerStream
 } from '../lib/chatStream'
 import { extractArtifacts, formatBytes, type Artifact } from '../lib/artifacts'
+import {
+  canGoBack,
+  canGoForward,
+  currentPrompt,
+  historyFromPrompts,
+  recallNext,
+  recallPrevious,
+  recordPrompt,
+  type PromptHistory
+} from '../lib/promptHistory'
 import { PERMISSION_LABELS } from '@shared/permissions'
 import { CommandPalette } from './CommandPalette'
 import { ReviewPane } from './ReviewPane'
@@ -406,6 +416,11 @@ export function Chat({
   const programmaticScrollRef = useRef(false)
   const usageRef = useRef<ChatUsage | null>(null)
   const stickToBottomRef = useRef(true)
+  const [promptHistory, setPromptHistory] = useState<PromptHistory>(() => ({
+    items: [],
+    index: -1,
+    draft: ''
+  }))
 
   const scrollToBottom = useCallback((): void => {
     const element = scrollRef.current
@@ -1167,6 +1182,18 @@ export function Chat({
       const trimmed = text.trim()
       if (!trimmed || streaming) return
 
+      setPromptHistory((previous) => {
+        const base =
+          previous.items.length > 0
+            ? previous
+            : historyFromPrompts(
+                messages
+                  .filter((message) => message.role === 'user')
+                  .map((message) => message.content)
+              )
+        return recordPrompt(base, trimmed)
+      })
+
       const effective = await maybeCompact()
       const base = effective.summary
         ? [
@@ -1427,6 +1454,39 @@ export function Chat({
     )
   }, [messages, multiverse.enabled, runRequest, streaming])
 
+  const seededHistory = useMemo<PromptHistory>(() => {
+    if (promptHistory.items.length > 0) return promptHistory
+    return historyFromPrompts(
+      messages.filter((message) => message.role === 'user').map((message) => message.content)
+    )
+  }, [messages, promptHistory])
+
+  const recallOlderPrompt = useCallback((): void => {
+    const next = recallPrevious(seededHistory, input)
+    if (next === seededHistory) return
+    setPromptHistory(next)
+    setInput(currentPrompt(next, input))
+    window.setTimeout(() => {
+      const element = textareaRef.current
+      if (!element) return
+      element.focus()
+      element.setSelectionRange(element.value.length, element.value.length)
+    }, 0)
+  }, [input, seededHistory])
+
+  const recallNewerPrompt = useCallback((): void => {
+    const next = recallNext(seededHistory)
+    if (next === seededHistory) return
+    setPromptHistory(next)
+    setInput(currentPrompt(next, input))
+    window.setTimeout(() => {
+      const element = textareaRef.current
+      if (!element) return
+      element.focus()
+      element.setSelectionRange(element.value.length, element.value.length)
+    }, 0)
+  }, [input, seededHistory])
+
   const stop = useCallback(async (): Promise<void> => {
     const id = requestRef.current
     if (id) {
@@ -1661,6 +1721,16 @@ export function Chat({
     if (event.key === 'Tab' && event.shiftKey) {
       event.preventDefault()
       if (agent.enabled) toggleProfile()
+      return
+    }
+    if (event.altKey && event.key === 'ArrowUp') {
+      event.preventDefault()
+      recallOlderPrompt()
+      return
+    }
+    if (event.altKey && event.key === 'ArrowDown') {
+      event.preventDefault()
+      recallNewerPrompt()
       return
     }
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -2308,6 +2378,26 @@ export function Chat({
         />
         <div className="composer-actions">
           <span className="meta">
+            {(canGoBack(seededHistory) || canGoForward(seededHistory)) && (
+              <span className="composer-history">
+                <button
+                  className="btn-ghost"
+                  disabled={!canGoBack(seededHistory)}
+                  onClick={recallOlderPrompt}
+                  title="Önceki istem (Alt+↑)"
+                >
+                  ↶
+                </button>
+                <button
+                  className="btn-ghost"
+                  disabled={!canGoForward(seededHistory)}
+                  onClick={recallNewerPrompt}
+                  title="Sonraki istem (Alt+↓)"
+                >
+                  ↷
+                </button>
+              </span>
+            )}
             {contextLength !== null && contextPercent !== null && (
               <span
                 className={`context-meter ${

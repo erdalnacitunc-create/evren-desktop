@@ -38,3 +38,24 @@
 7. **Yeniden üret**: son asistan yanıtında `↻ Yeniden üret`.
 8. **W3 checks**: `Dosyalar > Kontroller` + `run_checks` aracı; typecheck/lint/test/
    build scriptleri algılanır ve çalıştırılır.
+
+## İstem geçmişi (geri / ileri)
+
+Gönderilen istemler besteci içinde hatırlanır:
+
+- `Alt+↑` — önceki istemi geri getirir (geri)
+- `Alt+↓` — sonraki isteme, yığın sonunda yazmakta olduğunuz taslağa döner (ileri)
+- Bestecinin solundaki `↶` / `↷` düğmeleri aynı işi yapar
+
+Detaylar:
+
+- Son 100 istem tutulur; art arda aynı istem tekrarı yığına eklenmez.
+- Oturum açıldığında geçmiş, o oturumdaki kullanıcı mesajlarından tohumlanır; uygulamayı
+  yeniden başlatmak geçmişi silmez.
+- Gezinmeye başlamadan önce yazdığınız metin taslak olarak saklanır ve ileri gezinmenin
+  sonunda geri gelir.
+- İstem gönderildiğinde gezinme sıfırlanır.
+- Geçmiş yalnızca bellekte tutulur; ayrı bir dosyaya yazılmaz.
+
+Kod: `src/renderer/src/lib/promptHistory.ts` (saf fonksiyonlar), testler:
+`node scripts/run-unit.cjs scripts/prompt-history-test.ts`.

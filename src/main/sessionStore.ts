@@ -173,3 +173,18 @@ export async function searchSessions(query: string): Promise<SessionSummary[]> {
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map(summarize)
 }
+
+/**
+ * Yalnızca testler için: bellek içi önbelleği temizler, böylece bir sonraki
+ * çağrı dosyadan yeniden okur ve kalıcılık doğrulanabilir.
+ */
+export async function __resetCacheForTests(): Promise<void> {
+  await writeChain
+  cache = null
+  writeChain = Promise.resolve()
+}
+
+/** Yalnızca testler için: bekleyen yazmaların bitmesini bekler. */
+export async function __flushWritesForTests(): Promise<void> {
+  await writeChain
+}

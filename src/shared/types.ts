@@ -269,6 +269,18 @@ export interface GithubAppSettings {
 export type PermissionAction = 'allow' | 'ask' | 'deny'
 export type PermissionCategory = 'read' | 'edit' | 'execute' | 'browser' | 'mcp' | 'computer'
 
+/**
+ * Kategori varsayılanını belirli bir kaynak için ezen kural.
+ * `resource` basit joker karakterler içerir: `*` her şey, `?` tek karakter.
+ */
+export interface PermissionRule {
+  id: string
+  category: PermissionCategory
+  resource: string
+  effect: PermissionAction
+  note?: string
+}
+
 export interface PermissionSettings {
   read?: PermissionAction
   edit?: PermissionAction
@@ -276,6 +288,7 @@ export interface PermissionSettings {
   browser?: PermissionAction
   mcp?: PermissionAction
   computer?: PermissionAction
+  rules?: PermissionRule[]
 }
 
 export interface TodoItem {

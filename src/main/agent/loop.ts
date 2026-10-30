@@ -9,7 +9,7 @@ import { streamCompletion } from '../sse'
 import { getSettings } from '../settings'
 import { getWorkspaceRoot } from '../workspace'
 import { ensureAgentWorkspace } from '../workspace'
-import { resolvePermission, toolCategory } from '../../shared/permissions'
+import { resolvePermission, permissionResource, toolCategory } from '../../shared/permissions'
 import { approvalKey, waitForApproval } from './approval'
 import { createTools } from './tools'
 import { runSubagent } from './subagent'
@@ -339,7 +339,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         }
 
         const category = tool.category ?? toolCategory(call.name)
-        const permission = resolvePermission(settings.permissions, mode, profile, category)
+        const resource = permissionResource(call.name, args)
+        const permission = resolvePermission(settings.permissions, mode, profile, category, resource)
         if (permission === 'deny') {
           const content =
             profile === 'plan' && (category === 'edit' || category === 'execute' || category === 'computer')

@@ -1,7 +1,7 @@
 import { buildBaseBody } from '../chatShared'
 import { loadEnabledSkills } from '../extensions'
 import { streamCompletion } from '../sse'
-import { resolvePermission, toolCategory } from '../../shared/permissions'
+import { resolvePermission, permissionResource, toolCategory } from '../../shared/permissions'
 import type {
   AgentApprovalRequest,
   AgentMode,
@@ -157,7 +157,8 @@ export async function runSubagent(options: SubagentOptions): Promise<{
 
         const args = parseArguments(call.arguments)
         const category = tool.category ?? toolCategory(call.name)
-        const permission = resolvePermission(permissions, mode, profile, category)
+        const resource = permissionResource(call.name, args)
+        const permission = resolvePermission(permissions, mode, profile, category, resource)
         if (permission === 'deny') {
           const content = `Alt ajan için izin verilmedi (${category}).`
           messages.push({ role: 'tool', tool_call_id: call.id, content })

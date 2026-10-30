@@ -11,6 +11,8 @@ import type {
   HeadlessSettings,
   HookSettings,
   MemorySettings,
+  PermissionCategory,
+  PermissionRule,
   PermissionSettings,
   SubagentSettings,
   ThemeMode
@@ -131,7 +133,42 @@ function normalizePermissions(
       result[category] = value
     }
   }
+  const rules = normalizePermissionRules(input?.rules)
+  if (rules.length > 0) result.rules = rules
   return result
+}
+
+const MAX_PERMISSION_RULES = 200
+
+/** Kullanıcı tarafından düzenlenebilen izin kurallarını doğrular ve sınırlar. */
+function normalizePermissionRules(input: unknown): PermissionRule[] {
+  if (!Array.isArray(input)) return []
+  const rules: PermissionRule[] = []
+  for (const raw of input.slice(0, MAX_PERMISSION_RULES)) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = raw as Partial<PermissionRule>
+    const category = item.category as PermissionCategory | undefined
+    if (!category || !PERMISSION_CATEGORIES.includes(category)) continue
+    if (item.effect !== 'allow' && item.effect !== 'ask' && item.effect !== 'deny') continue
+    const resource = typeof item.resource === 'string' ? item.resource.trim() : ''
+    if (!resource) continue
+    const id =
+      typeof item.id === 'string' && item.id.trim()
+        ? item.id.trim().slice(0, 64)
+        : `rule_${rules.length + 1}`
+    const note =
+      typeof item.note === 'string' && item.note.trim()
+        ? item.note.trim().slice(0, 120)
+        : undefined
+    rules.push({
+      id,
+      category,
+      resource: resource.slice(0, 300),
+      effect: item.effect,
+      ...(note ? { note } : {})
+    })
+  }
+  return rules
 }
 
 function normalizeMemory(input: Partial<MemorySettings> | undefined): MemorySettings {

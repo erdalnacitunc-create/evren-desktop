@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import type {
   AgentMode,
   AppSettings,
   HookSettings,
   PermissionAction,
+  PermissionCategory,
+  PermissionRule,
   PermissionSettings
 } from '@shared/types'
 import {
@@ -42,6 +45,33 @@ export function AgentPanel({
   onChooseWorkspace,
   onClearWorkspace
 }: Props): React.JSX.Element {
+  const [ruleCategory, setRuleCategory] = useState<PermissionCategory>('execute')
+  const [ruleResource, setRuleResource] = useState('')
+  const [ruleEffect, setRuleEffect] = useState<PermissionAction>('ask')
+  const rules = permissions.rules ?? []
+
+  function updateRules(next: PermissionRule[]): void {
+    onChange({ permissions: { ...permissions, rules: next } })
+  }
+
+  function addRule(): void {
+    const resource = ruleResource.trim()
+    if (!resource) return
+    const withoutDuplicate = rules.filter(
+      (rule) => !(rule.category === ruleCategory && rule.resource === resource)
+    )
+    updateRules([
+      ...withoutDuplicate,
+      {
+        id: `rule_${Date.now().toString(36)}`,
+        category: ruleCategory,
+        resource,
+        effect: ruleEffect
+      }
+    ])
+    setRuleResource('')
+  }
+
   return (
     <div className="params-panel agent-panel">
       <div className="agent-block">
@@ -162,6 +192,78 @@ export function AgentPanel({
         <button className="btn-ghost permissions-reset" onClick={() => onChange({ permissions: {} })}>
           Varsayılana dön
         </button>
+
+        <div className="permission-rules">
+          <span className="agent-label">Kural tabanlı izinler</span>
+          <p className="params-note">
+            Kategori varsayılanını belirli komut, yol veya adres için ezer. Örnek kaynaklar:{' '}
+            <code>git push*</code>, <code>npm test</code>, <code>src/**</code>,{' '}
+            <code>https://example.com/*</code>. En özel desen kazanır.
+          </p>
+          {rules.length === 0 ? (
+            <p className="params-note">Henüz kural yok.</p>
+          ) : (
+            <ul className="permission-rule-list">
+              {rules.map((rule) => (
+                <li key={rule.id} className="permission-rule">
+                  <span className="permission-rule-scope">
+                    {PERMISSION_LABELS[rule.category]}
+                  </span>
+                  <code className="permission-rule-resource" title={rule.resource}>
+                    {rule.resource}
+                  </code>
+                  <span className={`permission-rule-effect ${rule.effect}`}>
+                    {ACTION_LABELS[rule.effect]}
+                  </span>
+                  <button
+                    className="btn-ghost danger"
+                    title="Kuralı sil"
+                    onClick={() => updateRules(rules.filter((item) => item.id !== rule.id))}
+                  >
+                    Sil
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="permission-rule-form">
+            <select
+              value={ruleCategory}
+              onChange={(event) => setRuleCategory(event.target.value as PermissionCategory)}
+            >
+              {PERMISSION_CATEGORIES.map((category) => (
+                <option key={category} value={category}>
+                  {PERMISSION_LABELS[category]}
+                </option>
+              ))}
+            </select>
+            <input
+              type="text"
+              value={ruleResource}
+              placeholder="git push*"
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => setRuleResource(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') addRule()
+              }}
+            />
+            <select
+              value={ruleEffect}
+              onChange={(event) => setRuleEffect(event.target.value as PermissionAction)}
+            >
+              {(['ask', 'allow', 'deny'] as PermissionAction[]).map((action) => (
+                <option key={action} value={action}>
+                  {ACTION_LABELS[action]}
+                </option>
+              ))}
+            </select>
+            <button className="btn" onClick={addRule} disabled={!ruleResource.trim()}>
+              Kural ekle
+            </button>
+          </div>
+        </div>
       </details>
 
       <div className="agent-block hooks-block">

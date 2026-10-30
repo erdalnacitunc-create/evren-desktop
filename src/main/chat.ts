@@ -27,6 +27,7 @@ import {
   emptyStreamState,
   type StreamState
 } from './chatStreamTracker'
+import { asSink } from './agent/eventSink'
 
 const controllers = new Map<string, AbortController>()
 /**
@@ -217,7 +218,7 @@ export async function startChat(
         apiKey: key,
         payload: augmentedPayload,
         controller,
-        send
+        sink: asSink(send)
       })
     )
   } else if (augmentedPayload.agent?.enabled) {
@@ -230,7 +231,7 @@ export async function startChat(
         apiKey: key,
         payload: augmentedPayload,
         controller,
-        send,
+        sink: asSink(send),
         workspaceRoot
       })
     )

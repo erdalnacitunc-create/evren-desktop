@@ -1,5 +1,10 @@
 import { buildBaseBody, toErrorEvent } from './chatShared'
 import { streamCompletion } from './sse'
+import {
+  createRequestSink,
+  createSafeSink,
+  type AgentEventSink
+} from './agent/eventSink'
 import type {
   ChatEvent,
   ChatMessage,
@@ -13,7 +18,7 @@ interface MultiverseRunOptions {
   apiKey: string
   payload: ChatRequest
   controller: AbortController
-  send: (event: ChatEvent) => void
+  sink: AgentEventSink
 }
 
 function textOf(content: ChatMessage['content']): string {
@@ -156,7 +161,9 @@ function buildSynthesisMessages(
 }
 
 export async function runMultiverse(options: MultiverseRunOptions): Promise<void> {
-  const { requestId, baseUrl, apiKey, payload, controller, send } = options
+  const { requestId, baseUrl, apiKey, payload, controller } = options
+  const sink = createSafeSink(createRequestSink(options.sink, requestId))
+  const send = (event: ChatEvent): void => sink.emit(event)
 
   const primary = payload.model
   const members = [...new Set(payload.multiverse?.members ?? [])].filter(

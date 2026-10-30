@@ -2,6 +2,7 @@ import { app, safeStorage } from 'electron'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import { runAgent } from './agent/loop'
+import { asSink } from './agent/eventSink'
 import { createTools } from './agent/tools'
 import { resolveApproval, waitForApproval } from './agent/approval'
 import { captureScreen, runComputerCommand, toSendKeys } from './agent/computer'
@@ -241,7 +242,7 @@ export async function runSelfTest(): Promise<void> {
             agent: { enabled: true, mode: 'auto', profile: 'build', browser: true, computer: false, workspace: false }
           },
           controller,
-          send: (event) => events.push(event)
+          sink: asSink((event) => events.push(event))
         })
 
         const toolCalls = events.filter(
@@ -541,7 +542,7 @@ export async function runSelfTest(): Promise<void> {
             multiverse: { enabled: true, members }
           },
           controller,
-          send: (event) => events.push(event)
+          sink: asSink((event) => events.push(event))
         })
 
         const memberResults = events.filter(

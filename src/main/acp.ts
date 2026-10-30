@@ -12,6 +12,7 @@ import type {
 } from '../shared/types'
 import { listModels } from './api'
 import { runAgent } from './agent/loop'
+import { asSink } from './agent/eventSink'
 import { loadApiKey } from './credentials'
 import { getSettings } from './settings'
 import { appendMessage, createSession, getSession, renameSession } from './sessionStore'
@@ -325,7 +326,7 @@ async function runPrompt(
         }
       },
       controller,
-      send: handleEvent,
+      sink: asSink(handleEvent),
       approval: (approval) => requestPermission(session, approval),
       workspaceRoot: session.cwd
     })

@@ -12,6 +12,11 @@ import { ensureAgentWorkspace } from '../workspace'
 import { resolvePermission, permissionResource, toolCategory } from '../../shared/permissions'
 import { approvalKey, waitForApproval } from './approval'
 import { drainSteering } from './steering'
+import {
+  createRequestSink,
+  createSafeSink,
+  type AgentEventSink
+} from './eventSink'
 import { createTools } from './tools'
 import { runSubagent } from './subagent'
 import {
@@ -38,7 +43,7 @@ interface AgentRunOptions {
   apiKey: string
   payload: ChatRequest
   controller: AbortController
-  send: (event: ChatEvent) => void
+  sink: AgentEventSink
   approval?: (request: AgentApprovalRequest) => Promise<boolean>
   workspaceRoot?: string | null
 }
@@ -70,7 +75,10 @@ function approvalPreview(name: string, args: Record<string, unknown>): Record<st
 }
 
 export async function runAgent(options: AgentRunOptions): Promise<void> {
-  const { requestId, baseUrl, apiKey, payload, controller, send } = options
+  const { requestId, baseUrl, apiKey, payload, controller, webContentsId } = options
+  // Taşıyıcıdan bağımsız iç `send`: tüm olay çağrıları sink üzerinden çıkar.
+  const sink = createSafeSink(createRequestSink(options.sink, requestId))
+  const send = (event: ChatEvent): void => sink.emit(event)
   const mode = payload.agent?.mode ?? 'confirm'
   const profile = payload.agent?.profile ?? 'build'
   const skills = await loadEnabledSkills()

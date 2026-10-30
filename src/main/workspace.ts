@@ -109,7 +109,7 @@ export function currentWorkspaceScope(): string | null | undefined {
   return workspaceScope.getStore()
 }
 
-export function setWorkspaceRootOverride(root: string | null): void {
+export function setWorkspaceRootOverride(root: string | null | undefined): void {
   workspaceRootOverride = root
 }
 

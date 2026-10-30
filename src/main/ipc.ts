@@ -1,4 +1,13 @@
-import { ipcMain, dialog, safeStorage, shell, BrowserWindow, Notification } from 'electron'
+import {
+  ipcMain,
+  dialog,
+  safeStorage,
+  shell,
+  BrowserWindow,
+  Notification,
+  type IpcMainInvokeEvent
+} from 'electron'
+import { assertTrustedSender } from './ipcGuard'
 import { appIconPath } from './appIcon'
 import { promises as fs } from 'fs'
 import { ApiError, getQuota, listModels } from './api'
@@ -226,8 +235,24 @@ async function requireCredentials(): Promise<{ key: string; baseUrl: string }> {
   return { key, baseUrl: settings.baseUrl }
 }
 
+/**
+ * Tüm IPC handler'ları gönderici doğrulamasından geçirir.
+ * Renderer dışından (alt çerçeve, devtools, yabancı origin) gelen çağrılar reddedilir.
+ */
+type IpcListener = (
+  event: IpcMainInvokeEvent,
+  ...args: never[]
+) => Promise<unknown> | unknown
+
+function registerHandler(channel: string, listener: IpcListener): void {
+  ipcMain.handle(channel, async (event, ...args) => {
+    assertTrustedSender(event, channel)
+    return listener(event, ...(args as never[]))
+  })
+}
+
 export function registerIpcHandlers(): void {
-  ipcMain.handle('app:ping', () => ({
+  registerHandler('app:ping', () => ({
     ok: true,
     app: 'EVREN Desktop',
     version: process.env['npm_package_version'] ?? '0.1.0',
@@ -235,12 +260,12 @@ export function registerIpcHandlers(): void {
     time: new Date().toISOString()
   }))
 
-  ipcMain.handle('window:minimize', (event): Result<true> => {
+  registerHandler('window:minimize', (event): Result<true> => {
     BrowserWindow.fromWebContents(event.sender)?.minimize()
     return { ok: true, data: true }
   })
 
-  ipcMain.handle('window:toggleMaximize', (event): Result<boolean> => {
+  registerHandler('window:toggleMaximize', (event): Result<boolean> => {
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) return { ok: true, data: false }
     if (window.isMaximized()) window.unmaximize()
@@ -248,16 +273,16 @@ export function registerIpcHandlers(): void {
     return { ok: true, data: window.isMaximized() }
   })
 
-  ipcMain.handle('window:isMaximized', (event): Result<boolean> => {
+  registerHandler('window:isMaximized', (event): Result<boolean> => {
     return { ok: true, data: BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false }
   })
 
-  ipcMain.handle('window:close', (event): Result<true> => {
+  registerHandler('window:close', (event): Result<true> => {
     BrowserWindow.fromWebContents(event.sender)?.close()
     return { ok: true, data: true }
   })
 
-  ipcMain.handle('key:status', async (): Promise<Result<KeyStatus>> => {
+  registerHandler('key:status', async (): Promise<Result<KeyStatus>> => {
     const key = await loadApiKey()
     return {
       ok: true,
@@ -270,7 +295,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('key:validate', async (_event, raw: string): Promise<Result<ModelInfo[]>> => {
+  registerHandler('key:validate', async (_event, raw: string): Promise<Result<ModelInfo[]>> => {
     try {
       const { baseUrl } = await getSettings()
       const models = await listModels(baseUrl, String(raw ?? '').trim())
@@ -280,7 +305,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('key:save', async (_event, raw: string): Promise<Result<{ hint: string }>> => {
+  registerHandler('key:save', async (_event, raw: string): Promise<Result<{ hint: string }>> => {
     try {
       const key = String(raw ?? '').trim()
       await saveApiKey(key)
@@ -290,7 +315,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('key:clear', async (): Promise<Result<true>> => {
+  registerHandler('key:clear', async (): Promise<Result<true>> => {
     try {
       await clearApiKey()
       return { ok: true, data: true }
@@ -299,7 +324,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('models:list', async (): Promise<Result<ModelInfo[]>> => {
+  registerHandler('models:list', async (): Promise<Result<ModelInfo[]>> => {
     try {
       const { key, baseUrl } = await requireCredentials()
       return { ok: true, data: await listModels(baseUrl, key) }
@@ -308,7 +333,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'audio:transcribe',
     async (_event, payload: unknown): Promise<Result<{ text: string; model: string }>> => {
       try {
@@ -338,7 +363,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('quota:get', async (): Promise<Result<QuotaStatus>> => {
+  registerHandler('quota:get', async (): Promise<Result<QuotaStatus>> => {
     try {
       const { key, baseUrl } = await requireCredentials()
       return { ok: true, data: await getQuota(baseUrl, key) }
@@ -347,7 +372,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'chat:start',
     async (event, payload: ChatRequest): Promise<Result<{ requestId: string }>> => {
       try {
@@ -358,7 +383,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('chat:abort', async (_event, requestId: string): Promise<Result<boolean>> => {
+  registerHandler('chat:abort', async (_event, requestId: string): Promise<Result<boolean>> => {
     try {
       return { ok: true, data: abortChat(String(requestId ?? '')) }
     } catch (error) {
@@ -366,7 +391,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'agent:approve',
     async (
       _event,
@@ -398,7 +423,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'agent:answerQuestion',
     async (
       _event,
@@ -419,7 +444,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('sessions:list', async (): Promise<Result<SessionSummary[]>> => {
+  registerHandler('sessions:list', async (): Promise<Result<SessionSummary[]>> => {
     try {
       return { ok: true, data: await listSessions() }
     } catch (error) {
@@ -427,7 +452,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('sessions:search', async (_event, query: string): Promise<Result<SessionSummary[]>> => {
+  registerHandler('sessions:search', async (_event, query: string): Promise<Result<SessionSummary[]>> => {
     try {
       return { ok: true, data: await searchSessions(String(query ?? '')) }
     } catch (error) {
@@ -435,7 +460,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('sessions:get', async (_event, id: string): Promise<Result<Session | null>> => {
+  registerHandler('sessions:get', async (_event, id: string): Promise<Result<Session | null>> => {
     try {
       return { ok: true, data: await getSession(String(id ?? '')) }
     } catch (error) {
@@ -443,7 +468,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('sessions:create', async (_event, modelId: string): Promise<Result<Session>> => {
+  registerHandler('sessions:create', async (_event, modelId: string): Promise<Result<Session>> => {
     try {
       return { ok: true, data: await createSession(String(modelId ?? '')) }
     } catch (error) {
@@ -451,7 +476,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'sessions:append',
     async (_event, sessionId: string, message: StoredMessage): Promise<Result<Session | null>> => {
       try {
@@ -462,7 +487,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'sessions:rename',
     async (_event, sessionId: string, title: string): Promise<Result<Session | null>> => {
       try {
@@ -473,7 +498,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('sessions:delete', async (_event, sessionId: string): Promise<Result<boolean>> => {
+  registerHandler('sessions:delete', async (_event, sessionId: string): Promise<Result<boolean>> => {
     try {
       return { ok: true, data: await deleteSession(String(sessionId ?? '')) }
     } catch (error) {
@@ -481,7 +506,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'sessions:setWorkspace',
     async (
       _event,
@@ -502,7 +527,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'sessions:activateWorkspace',
     async (_event, sessionId: string): Promise<Result<Session | null>> => {
       try {
@@ -516,7 +541,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'workspace:deleteTemp',
     async (_event, path: string): Promise<Result<boolean>> => {
       try {
@@ -527,7 +552,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'sessions:setModel',
     async (_event, sessionId: string, modelId: string): Promise<Result<Session | null>> => {
       try {
@@ -541,7 +566,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'sessions:setTodos',
     async (_event, sessionId: string, todos: unknown): Promise<Result<Session | null>> => {
       try {
@@ -558,7 +583,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('settings:get', async (): Promise<Result<AppSettings>> => {
+  registerHandler('settings:get', async (): Promise<Result<AppSettings>> => {
     try {
       return { ok: true, data: await getSettings() }
     } catch (error) {
@@ -566,7 +591,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'settings:setBaseUrl',
     async (_event, url: string): Promise<Result<AppSettings>> => {
       try {
@@ -578,7 +603,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'settings:update',
     async (_event, patch: Partial<AppSettings>): Promise<Result<AppSettings>> => {
       try {
@@ -589,7 +614,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('headless:status', async (): Promise<Result<HeadlessStatus>> => {
+  registerHandler('headless:status', async (): Promise<Result<HeadlessStatus>> => {
     try {
       return { ok: true, data: await headlessStatus() }
     } catch (error) {
@@ -597,7 +622,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('terminal:status', async (): Promise<Result<TerminalStatus>> => {
+  registerHandler('terminal:status', async (): Promise<Result<TerminalStatus>> => {
     try {
       return { ok: true, data: terminalStatus() }
     } catch (error) {
@@ -605,7 +630,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('update:status', async (): Promise<Result<UpdateStatus>> => {
+  registerHandler('update:status', async (): Promise<Result<UpdateStatus>> => {
     try {
       return { ok: true, data: updaterStatus() }
     } catch (error) {
@@ -613,7 +638,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('update:check', async (): Promise<Result<UpdateStatus>> => {
+  registerHandler('update:check', async (): Promise<Result<UpdateStatus>> => {
     try {
       return { ok: true, data: await checkForUpdates() }
     } catch (error) {
@@ -621,7 +646,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('update:download', async (): Promise<Result<UpdateStatus>> => {
+  registerHandler('update:download', async (): Promise<Result<UpdateStatus>> => {
     try {
       return { ok: true, data: await downloadUpdate() }
     } catch (error) {
@@ -629,7 +654,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('update:install', async (): Promise<Result<true>> => {
+  registerHandler('update:install', async (): Promise<Result<true>> => {
     try {
       installUpdate()
       return { ok: true, data: true }
@@ -638,7 +663,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'terminal:start',
     async (_event, cwd?: string): Promise<Result<TerminalStatus>> => {
       try {
@@ -649,7 +674,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('terminal:stop', async (): Promise<Result<true>> => {
+  registerHandler('terminal:stop', async (): Promise<Result<true>> => {
     try {
       stopTerminal()
       return { ok: true, data: true }
@@ -658,7 +683,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('terminal:interrupt', async (): Promise<Result<true>> => {
+  registerHandler('terminal:interrupt', async (): Promise<Result<true>> => {
     try {
       interruptTerminal()
       return { ok: true, data: true }
@@ -667,7 +692,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'terminal:write',
     async (_event, data: string): Promise<Result<boolean>> => {
       try {
@@ -678,7 +703,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'terminal:runCode',
     async (
       _event,
@@ -696,7 +721,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'headless:configure',
     async (
       _event,
@@ -715,7 +740,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('headless:regenerateToken', async (): Promise<Result<HeadlessStatus>> => {
+  registerHandler('headless:regenerateToken', async (): Promise<Result<HeadlessStatus>> => {
     try {
       await regenerateHeadlessToken()
       const settings = await getSettings()
@@ -728,7 +753,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('extensions:list', async (): Promise<Result<InstalledExtension[]>> => {
+  registerHandler('extensions:list', async (): Promise<Result<InstalledExtension[]>> => {
     try {
       return { ok: true, data: await listExtensions() }
     } catch (error) {
@@ -736,7 +761,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'extensions:inspect',
     async (_event, url: string): Promise<Result<RepoInspection>> => {
       try {
@@ -748,7 +773,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'extensions:install',
     async (
       _event,
@@ -773,7 +798,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'extensions:remove',
     async (_event, id: string): Promise<Result<boolean>> => {
       try {
@@ -784,7 +809,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'extensions:setEnabled',
     async (_event, id: string, enabled: boolean): Promise<Result<boolean>> => {
       try {
@@ -798,7 +823,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'github:tokenStatus',
     async (): Promise<Result<{ hasToken: boolean; hint: string | null }>> => {
       try {
@@ -810,7 +835,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('github:account', async (): Promise<Result<GithubAccount>> => {
+  registerHandler('github:account', async (): Promise<Result<GithubAccount>> => {
     try {
       return { ok: true, data: await getGithubAccount() }
     } catch (error) {
@@ -818,7 +843,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'github:connect',
     async (_event, token: string): Promise<Result<GithubAccount>> => {
       try {
@@ -829,7 +854,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('github:disconnect', async (): Promise<Result<true>> => {
+  registerHandler('github:disconnect', async (): Promise<Result<true>> => {
     try {
       await disconnectGithubAccount()
       return { ok: true, data: true }
@@ -838,7 +863,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('github:repos', async (): Promise<Result<GithubRepo[]>> => {
+  registerHandler('github:repos', async (): Promise<Result<GithubRepo[]>> => {
     try {
       return { ok: true, data: await listGithubRepos() }
     } catch (error) {
@@ -846,7 +871,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'github:deviceStart',
     async (_event, clientId: string): Promise<Result<GithubDeviceCode>> => {
       try {
@@ -857,7 +882,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'github:devicePoll',
     async (
       _event,
@@ -875,7 +900,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('githubApp:status', async (): Promise<Result<GithubAppStatus>> => {
+  registerHandler('githubApp:status', async (): Promise<Result<GithubAppStatus>> => {
     try {
       return { ok: true, data: await githubAppStatus() }
     } catch (error) {
@@ -883,7 +908,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'githubApp:saveCredentials',
     async (
       _event,
@@ -904,7 +929,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'githubApp:installations',
     async (): Promise<Result<GithubAppInstallation[]>> => {
       try {
@@ -915,7 +940,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'githubApp:connect',
     async (_event, installationId: number): Promise<Result<GithubAppStatus>> => {
       try {
@@ -929,7 +954,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('githubApp:refresh', async (): Promise<Result<GithubAppStatus>> => {
+  registerHandler('githubApp:refresh', async (): Promise<Result<GithubAppStatus>> => {
     try {
       return { ok: true, data: await refreshGithubAppToken() }
     } catch (error) {
@@ -937,7 +962,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('githubApp:disconnect', async (): Promise<Result<GithubAppStatus>> => {
+  registerHandler('githubApp:disconnect', async (): Promise<Result<GithubAppStatus>> => {
     try {
       return { ok: true, data: await disconnectGithubApp() }
     } catch (error) {
@@ -945,7 +970,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('github:setToken', async (_event, token: string): Promise<Result<true>> => {
+  registerHandler('github:setToken', async (_event, token: string): Promise<Result<true>> => {
     try {
       await saveGithubToken(String(token ?? ''))
       return { ok: true, data: true }
@@ -954,7 +979,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('mcp:status', async (): Promise<Result<McpServerStatus[]>> => {
+  registerHandler('mcp:status', async (): Promise<Result<McpServerStatus[]>> => {
     try {
       return { ok: true, data: mcpStatuses() }
     } catch (error) {
@@ -962,7 +987,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'mcp:connect',
     async (_event, id: string): Promise<Result<McpServerStatus>> => {
       try {
@@ -975,7 +1000,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('mcp:disconnect', async (_event, id: string): Promise<Result<true>> => {
+  registerHandler('mcp:disconnect', async (_event, id: string): Promise<Result<true>> => {
     try {
       await disconnectMcp(String(id ?? ''))
       return { ok: true, data: true }
@@ -984,7 +1009,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('mcp:logout', async (_event, id: string): Promise<Result<true>> => {
+  registerHandler('mcp:logout', async (_event, id: string): Promise<Result<true>> => {
     try {
       await logoutMcp(String(id ?? ''))
       return { ok: true, data: true }
@@ -993,7 +1018,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('mcp:resources', async (): Promise<Result<McpResourceInfo[]>> => {
+  registerHandler('mcp:resources', async (): Promise<Result<McpResourceInfo[]>> => {
     try {
       return { ok: true, data: await listMcpResources() }
     } catch (error) {
@@ -1001,7 +1026,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('mcp:tools', async (): Promise<Result<McpToolInfo[]>> => {
+  registerHandler('mcp:tools', async (): Promise<Result<McpToolInfo[]>> => {
     try {
       return { ok: true, data: await listMcpTools() }
     } catch (error) {
@@ -1009,7 +1034,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'mcp:callTool',
     async (
       _event,
@@ -1029,7 +1054,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'mcp:readResource',
     async (
       _event,
@@ -1044,7 +1069,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('mcp:prompts', async (): Promise<Result<McpPromptInfo[]>> => {
+  registerHandler('mcp:prompts', async (): Promise<Result<McpPromptInfo[]>> => {
     try {
       return { ok: true, data: await listMcpPrompts() }
     } catch (error) {
@@ -1052,7 +1077,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'mcp:getPrompt',
     async (
       _event,
@@ -1071,7 +1096,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('mcp:tasks', async (): Promise<Result<McpTaskInfo[]>> => {
+  registerHandler('mcp:tasks', async (): Promise<Result<McpTaskInfo[]>> => {
     try {
       return { ok: true, data: await listMcpTasks() }
     } catch (error) {
@@ -1079,7 +1104,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'mcp:cancelTask',
     async (
       _event,
@@ -1097,7 +1122,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'mcp:taskResult',
     async (
       _event,
@@ -1115,7 +1140,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'mcp:elicitResponse',
     async (
       _event,
@@ -1136,7 +1161,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('plugins:status', async (): Promise<Result<PluginStatus[]>> => {
+  registerHandler('plugins:status', async (): Promise<Result<PluginStatus[]>> => {
     try {
       return { ok: true, data: pluginStatuses() }
     } catch (error) {
@@ -1144,7 +1169,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'plugins:load',
     async (_event, id: string): Promise<Result<PluginStatus>> => {
       try {
@@ -1157,7 +1182,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('plugins:unload', async (_event, id: string): Promise<Result<true>> => {
+  registerHandler('plugins:unload', async (_event, id: string): Promise<Result<true>> => {
     try {
       await unloadPlugin(String(id ?? ''))
       return { ok: true, data: true }
@@ -1166,7 +1191,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'extensions:updateConfig',
     async (
       _event,
@@ -1185,7 +1210,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('commands:list', async (): Promise<Result<SlashCommand[]>> => {
+  registerHandler('commands:list', async (): Promise<Result<SlashCommand[]>> => {
     try {
       return { ok: true, data: await listCommands() }
     } catch (error) {
@@ -1193,7 +1218,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'skills:get',
     async (_event, id: string): Promise<Result<{ id: string; name: string; content: string } | null>> => {
       try {
@@ -1204,7 +1229,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'compaction:run',
     async (_event, sessionId: string, focus?: string): Promise<Result<CompactionResult>> => {
       try {
@@ -1216,7 +1241,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('memory:list', async (_event, query?: string): Promise<Result<MemoryEntry[]>> => {
+  registerHandler('memory:list', async (_event, query?: string): Promise<Result<MemoryEntry[]>> => {
     try {
       return { ok: true, data: await listMemories(query ? String(query) : undefined) }
     } catch (error) {
@@ -1224,7 +1249,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('memory:add', async (_event, input: unknown): Promise<Result<MemoryEntry>> => {
+  registerHandler('memory:add', async (_event, input: unknown): Promise<Result<MemoryEntry>> => {
     try {
       return { ok: true, data: await addMemory(input as Parameters<typeof addMemory>[0]) }
     } catch (error) {
@@ -1232,7 +1257,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'memory:update',
     async (_event, id: string, patch: unknown): Promise<Result<MemoryEntry | null>> => {
       try {
@@ -1246,7 +1271,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('memory:delete', async (_event, id: string): Promise<Result<boolean>> => {
+  registerHandler('memory:delete', async (_event, id: string): Promise<Result<boolean>> => {
     try {
       return { ok: true, data: await deleteMemory(String(id ?? '')) }
     } catch (error) {
@@ -1254,7 +1279,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'memory:deleteMatching',
     async (_event, query: string): Promise<Result<number>> => {
       try {
@@ -1265,7 +1290,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('memory:clear', async (): Promise<Result<true>> => {
+  registerHandler('memory:clear', async (): Promise<Result<true>> => {
     try {
       await clearMemories()
       return { ok: true, data: true }
@@ -1274,7 +1299,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('memory:getInstructions', async (): Promise<Result<string>> => {
+  registerHandler('memory:getInstructions', async (): Promise<Result<string>> => {
     try {
       return { ok: true, data: await getInstructions() }
     } catch (error) {
@@ -1282,7 +1307,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'memory:setInstructions',
     async (_event, text: string): Promise<Result<true>> => {
       try {
@@ -1294,7 +1319,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('memory:getSettings', async (): Promise<Result<MemorySettings>> => {
+  registerHandler('memory:getSettings', async (): Promise<Result<MemorySettings>> => {
     try {
       return { ok: true, data: await getMemorySettings() }
     } catch (error) {
@@ -1302,7 +1327,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'memory:updateSettings',
     async (_event, patch: Partial<MemorySettings>): Promise<Result<MemorySettings>> => {
       try {
@@ -1313,7 +1338,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'memory:learn',
     async (_event, sessionId: string): Promise<Result<{ added: number; skipped?: string }>> => {
       try {
@@ -1325,7 +1350,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'artifacts:save',
     async (_event, name: string, content: string): Promise<Result<string | null>> => {
       try {
@@ -1341,7 +1366,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('workspace:get', async (): Promise<Result<WorkspaceInfo>> => {
+  registerHandler('workspace:get', async (): Promise<Result<WorkspaceInfo>> => {
     try {
       return { ok: true, data: await getWorkspaceInfo() }
     } catch (error) {
@@ -1349,7 +1374,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'app:chooseDirectory',
     async (_event, title?: string): Promise<Result<string | null>> => {
       try {
@@ -1367,7 +1392,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('workspace:choose', async (): Promise<Result<WorkspaceInfo>> => {
+  registerHandler('workspace:choose', async (): Promise<Result<WorkspaceInfo>> => {
     try {
       const result = await dialog.showOpenDialog({
         title: 'Çalışma alanı klasörü seç',
@@ -1382,7 +1407,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('workspace:createTemp', async (): Promise<Result<WorkspaceInfo>> => {
+  registerHandler('workspace:createTemp', async (): Promise<Result<WorkspaceInfo>> => {
     try {
       return { ok: true, data: await createTemporaryWorkspace() }
     } catch (error) {
@@ -1390,7 +1415,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'workspace:set',
     async (_event, path: string): Promise<Result<WorkspaceInfo>> => {
       try {
@@ -1401,7 +1426,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('workspace:clear', async (): Promise<Result<WorkspaceInfo>> => {
+  registerHandler('workspace:clear', async (): Promise<Result<WorkspaceInfo>> => {
     try {
       return { ok: true, data: await clearWorkspacePath() }
     } catch (error) {
@@ -1409,7 +1434,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('workspace:tree', async (): Promise<Result<WorkspaceEntry[]>> => {
+  registerHandler('workspace:tree', async (): Promise<Result<WorkspaceEntry[]>> => {
     try {
       return { ok: true, data: await getWorkspaceTree() }
     } catch (error) {
@@ -1417,7 +1442,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'workspace:read',
     async (
       _event,
@@ -1433,7 +1458,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'workspace:changes',
     async (_event, limit?: number): Promise<Result<WorkspaceChange[]>> => {
       try {
@@ -1444,7 +1469,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'workspace:checkpoints',
     async (_event, limit?: number): Promise<Result<WorkspaceCheckpoint[]>> => {
       try {
@@ -1455,7 +1480,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'workspace:restoreCheckpoint',
     async (_event, id: string): Promise<Result<WorkspaceRestoreResult>> => {
       try {
@@ -1466,7 +1491,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'workspace:undo',
     async (_event, id?: string): Promise<Result<WorkspaceUndoResult>> => {
       try {
@@ -1477,7 +1502,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('workspace:open', async (): Promise<Result<boolean>> => {
+  registerHandler('workspace:open', async (): Promise<Result<boolean>> => {
     try {
       const info = await getWorkspaceInfo()
       if (!info.path) throw new Error('Çalışma alanı seçilmedi.')
@@ -1489,7 +1514,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('workspace:checks', async (): Promise<Result<ProjectCheck[]>> => {
+  registerHandler('workspace:checks', async (): Promise<Result<ProjectCheck[]>> => {
     try {
       return { ok: true, data: await detectProjectChecks() }
     } catch (error) {
@@ -1497,7 +1522,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'workspace:runChecks',
     async (_event, names?: string[]): Promise<Result<CheckResult[]>> => {
       try {
@@ -1513,7 +1538,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'workspace:repoMap',
     async (_event, query?: string, maxFiles?: number): Promise<Result<RepoMapResult>> => {
       try {
@@ -1530,7 +1555,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('codeIndex:status', async (): Promise<Result<CodeIndexStatus>> => {
+  registerHandler('codeIndex:status', async (): Promise<Result<CodeIndexStatus>> => {
     try {
       return { ok: true, data: await getCodeIndexStatus() }
     } catch (error) {
@@ -1538,7 +1563,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('codeIndex:build', async (): Promise<Result<CodeIndexStatus>> => {
+  registerHandler('codeIndex:build', async (): Promise<Result<CodeIndexStatus>> => {
     try {
       return { ok: true, data: await buildCodeIndex() }
     } catch (error) {
@@ -1546,7 +1571,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'codeIndex:search',
     async (_event, query: string, topK?: number): Promise<Result<CodeSearchResult[]>> => {
       try {
@@ -1563,7 +1588,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('git:status', async (): Promise<Result<GitStatus>> => {
+  registerHandler('git:status', async (): Promise<Result<GitStatus>> => {
     try {
       return { ok: true, data: await getGitStatus() }
     } catch (error) {
@@ -1571,7 +1596,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'git:diff',
     async (_event, path?: string, staged?: boolean): Promise<Result<string>> => {
       try {
@@ -1585,7 +1610,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'git:stage',
     async (_event, paths?: string[]): Promise<Result<GitCommandResult>> => {
       try {
@@ -1601,7 +1626,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'git:unstage',
     async (_event, paths?: string[]): Promise<Result<GitCommandResult>> => {
       try {
@@ -1617,7 +1642,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'git:commit',
     async (_event, message: string): Promise<Result<GitCommandResult>> => {
       try {
@@ -1628,7 +1653,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('git:branches', async (): Promise<Result<string[]>> => {
+  registerHandler('git:branches', async (): Promise<Result<string[]>> => {
     try {
       return { ok: true, data: await listGitBranches() }
     } catch (error) {
@@ -1636,7 +1661,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('git:worktrees', async (): Promise<Result<GitWorktree[]>> => {
+  registerHandler('git:worktrees', async (): Promise<Result<GitWorktree[]>> => {
     try {
       return { ok: true, data: await listGitWorktrees() }
     } catch (error) {
@@ -1644,7 +1669,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'git:worktreeAdd',
     async (_event, branch: string): Promise<Result<GitWorktreeAddResult>> => {
       try {
@@ -1655,7 +1680,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'git:worktreeRemove',
     async (_event, path: string): Promise<Result<GitCommandResult>> => {
       try {
@@ -1666,7 +1691,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('git:remotes', async (): Promise<Result<GitRemote[]>> => {
+  registerHandler('git:remotes', async (): Promise<Result<GitRemote[]>> => {
     try {
       return { ok: true, data: await listGitRemotes() }
     } catch (error) {
@@ -1674,7 +1699,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'git:push',
     async (_event, remote?: string): Promise<Result<GitPushResult>> => {
       try {
@@ -1685,7 +1710,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('git:ghStatus', async (): Promise<Result<GitGhStatus>> => {
+  registerHandler('git:ghStatus', async (): Promise<Result<GitGhStatus>> => {
     try {
       return { ok: true, data: await getGhStatus() }
     } catch (error) {
@@ -1693,7 +1718,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('git:prStatus', async (): Promise<Result<GitPrStatus>> => {
+  registerHandler('git:prStatus', async (): Promise<Result<GitPrStatus>> => {
     try {
       return { ok: true, data: await getGitPrStatus() }
     } catch (error) {
@@ -1701,7 +1726,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'git:prCreate',
     async (_event, title: string, body?: string): Promise<Result<GitCommandResult>> => {
       try {
@@ -1712,7 +1737,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'app:openExternal',
     async (_event, url: string): Promise<Result<boolean>> => {
       try {
@@ -1723,7 +1748,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'app:openPath',
     async (_event, path: string): Promise<Result<true>> => {
       try {
@@ -1736,7 +1761,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'app:notify',
     async (_event, title: string, body: string): Promise<Result<boolean>> => {
       try {
@@ -1756,7 +1781,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'subagent:list',
     async (_event, sessionId?: string): Promise<Result<SubagentTaskInfo[]>> => {
       try {
@@ -1770,7 +1795,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'subagent:cancel',
     async (
       _event,
@@ -1785,7 +1810,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'subagent:retry',
     async (_event, taskId: string): Promise<Result<SubagentTaskInfo | null>> => {
       try {
@@ -1796,7 +1821,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('github:clearToken', async (): Promise<Result<true>> => {
+  registerHandler('github:clearToken', async (): Promise<Result<true>> => {
     try {
       await clearGithubToken()
       return { ok: true, data: true }
@@ -1805,7 +1830,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('scheduled:list', async (): Promise<Result<ScheduledTask[]>> => {
+  registerHandler('scheduled:list', async (): Promise<Result<ScheduledTask[]>> => {
     try {
       return { ok: true, data: await listScheduledTasks() }
     } catch (error) {
@@ -1813,7 +1838,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  registerHandler(
     'scheduled:create',
     async (_event, input: ScheduledTaskInput): Promise<Result<ScheduledTask>> => {
       try {
@@ -1824,7 +1849,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'scheduled:update',
     async (
       _event,
@@ -1839,7 +1864,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'scheduled:delete',
     async (_event, id: string): Promise<Result<boolean>> => {
       try {
@@ -1850,7 +1875,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  registerHandler(
     'scheduled:runNow',
     async (_event, id: string): Promise<Result<ScheduledTask | null>> => {
       try {

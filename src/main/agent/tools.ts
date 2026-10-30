@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { join } from 'path'
 import * as vm from 'vm'
 import { toolCategory } from '../../shared/permissions'
 import type { ChatEvent, PermissionCategory, TodoItem } from '../../shared/types'
@@ -13,6 +14,7 @@ import {
 } from '../mcp/manager'
 import { callPluginTool, listPluginTools, type AgentPluginTool } from '../plugins/manager'
 import { BrowserSession } from './browser'
+import { runLighthouseAudit } from '../lighthouse'
 import { queryUsbInventory, runPythonScript } from './hardware'
 import { waitForQuestion } from './question'
 import { captureScreen, runComputerCommand, toSendKeys } from './computer'
@@ -2189,6 +2191,62 @@ export function createTools(options: {
         ok: true,
         content: await browser.performance()
       })
+    })
+
+    tools.push({
+      name: 'lighthouse_audit',
+      category: 'browser',
+      description:
+        'Bir web sayfası için Lighthouse denetimi çalıştırır (performans, erişilebilirlik, ' +
+        'en iyi uygulamalar, SEO). Sistemdeki Chrome başsız modda açılır; adres http(s) olmalıdır. ' +
+        'Yerel bir dosyayı denetlemek için önce yerel sunucu başlat. Denetim 10-60 saniye sürer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Denetlenecek http(s) adresi.' },
+          categories: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: ['performance', 'accessibility', 'best-practices', 'seo']
+            },
+            description: 'Denetlenecek kategoriler (varsayılan: tümü).'
+          },
+          form_factor: {
+            type: 'string',
+            enum: ['mobile', 'desktop'],
+            description: 'Ekran profili (varsayılan: mobile).'
+          },
+          save_report: {
+            type: 'boolean',
+            description: 'true ise ham JSON raporu çalışma alanına yazılır.'
+          }
+        },
+        required: ['url']
+      },
+      summary: (args) => `Lighthouse: ${str(args.url)}`,
+      execute: async (args) => {
+        const categories = Array.isArray(args.categories)
+          ? (args.categories.filter((item): item is string => typeof item === 'string') as Array<
+              'performance' | 'accessibility' | 'best-practices' | 'seo'
+            >)
+          : undefined
+        const reportDir =
+          args.save_report === true
+            ? join((await getWorkspaceRoot()) ?? process.cwd(), '.evren')
+            : undefined
+        const result = await runLighthouseAudit({
+          url: str(args.url),
+          categories,
+          formFactor: args.form_factor === 'desktop' ? 'desktop' : 'mobile',
+          outputDir: reportDir
+        })
+        if (!result.ok) return { ok: false, content: `Lighthouse hatası: ${result.error}` }
+        const note = result.raw.reportPath
+          ? `\n\nHam rapor: ${result.raw.reportPath}`
+          : ''
+        return { ok: true, content: `${result.summary}\n${note}`.trim() }
+      }
     })
   }
 

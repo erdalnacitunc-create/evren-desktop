@@ -144,6 +144,33 @@ export interface HeadlessStatus {
   error?: string
 }
 
+export interface LighthouseAudit {
+  id: string
+  title: string
+  score: number | null
+  displayValue?: string
+  mode?: string
+}
+
+export interface LighthouseSummary {
+  url: string
+  fetchedAt: string
+  /** Kategori puanları (0-100). */
+  scores: Partial<Record<'performance' | 'accessibility' | 'best-practices' | 'seo', number>>
+  audits: LighthouseAudit[]
+  warnings: string[]
+}
+
+export interface LighthouseReport {
+  url: string
+  fetchedAt: string
+  scores: LighthouseSummary['scores']
+  summary: string
+  auditCount: number
+  categories: string[]
+  reportPath?: string
+}
+
 export interface TerminalStatus {
   running: boolean
   cwd: string | null

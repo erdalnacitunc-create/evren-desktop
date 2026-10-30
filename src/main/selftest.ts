@@ -72,6 +72,36 @@ export async function runSelfTest(): Promise<void> {
     lines.push(`pty_error=${error instanceof Error ? error.message : String(error)}`)
   }
 
+  // Lighthouse: yalnızca istenirse çalışır (Chrome açar, yavaştır).
+  if (process.env['EVREN_SELFTEST_LH'] === '1') {
+    try {
+      const { normalizeAuditUrl, runLighthouseAudit } = await import('./lighthouse')
+      lines.push(`lighthouse_url_guard=${normalizeAuditUrl('file:///x').ok === false}`)
+      const http = await import('http')
+      const server = http.createServer((_request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        response.end('<!doctype html><html lang="tr"><title>t</title><h1>x</h1></html>')
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      const audit = await runLighthouseAudit({
+        url: `http://127.0.0.1:${port}/`,
+        categories: ['seo'],
+        formFactor: 'desktop',
+        timeoutMs: 180_000
+      })
+      server.close()
+      lines.push(
+        audit.ok
+          ? `lighthouse_ok=true seo=${audit.summary.scores.seo ?? 'yok'} audits=${audit.summary.audits.length}`
+          : `lighthouse_ok=false error=${audit.error}`
+      )
+    } catch (error) {
+      lines.push(`lighthouse_error=${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   if (key) {
     const settings = await getSettings()
     lines.push(`base_url=${settings.baseUrl}`)

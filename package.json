@@ -21,7 +21,8 @@
     "test:e2e": "node scripts/e2e-smoke.cjs",
     "build:win": "electron-vite build && electron-builder --win --publish never",
     "build:linux": "electron-vite build && electron-builder --linux --publish never",
-    "test:unit": "node scripts/run-unit.cjs scripts/ipc-guard-test.ts && node scripts/run-unit.cjs scripts/logger-test.ts && node scripts/run-unit.cjs scripts/permission-test.ts && node scripts/run-unit.cjs scripts/settings-rules-test.ts && node scripts/run-unit.cjs scripts/prompt-history-test.ts && node scripts/run-unit.cjs scripts/steering-test.ts && node scripts/run-unit.cjs scripts/steer-gate-test.ts && node scripts/run-unit.cjs scripts/i18n-test.ts && node scripts/run-unit.cjs scripts/pty-test.ts"
+    "test:unit": "node scripts/run-unit.cjs scripts/ipc-guard-test.ts && node scripts/run-unit.cjs scripts/logger-test.ts && node scripts/run-unit.cjs scripts/permission-test.ts && node scripts/run-unit.cjs scripts/settings-rules-test.ts && node scripts/run-unit.cjs scripts/prompt-history-test.ts && node scripts/run-unit.cjs scripts/steering-test.ts && node scripts/run-unit.cjs scripts/steer-gate-test.ts && node scripts/run-unit.cjs scripts/i18n-test.ts && node scripts/run-unit.cjs scripts/pty-test.ts && node scripts/run-unit.cjs scripts/lighthouse-test.ts",
+    "test:lighthouse": "node scripts/run-unit.cjs scripts/lighthouse-live-test.ts"
   },
   "build": {
     "appId": "com.evren.desktop",
@@ -117,6 +118,7 @@
     "@xterm/xterm": "^5.5.0",
     "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
+    "lighthouse": "^13.4.1",
     "mermaid": "^12.2.0",
     "pdfjs-dist": "^6.4.299",
     "playwright-core": "^1.64.1",

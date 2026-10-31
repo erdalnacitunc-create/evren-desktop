@@ -965,12 +965,20 @@ export function Chat({
       if (event.type === 'content') {
         draftRef.current = { ...draftRef.current, content: draftRef.current.content + event.text }
         setDraft({ ...draftRef.current })
+        setNotice((current) => (current && current.includes('yeniden deneniyor') ? null : current))
       } else if (event.type === 'reasoning') {
         draftRef.current = {
           ...draftRef.current,
           reasoning: draftRef.current.reasoning + event.text
         }
         setDraft({ ...draftRef.current })
+      } else if (event.type === 'retry') {
+        // Geçici hata: otomatik yeniden deneme sürüyor, kullanıcıya bildir.
+        setNotice(
+          `${event.reason} — yeniden deneniyor (${event.attempt}/${event.maxAttempts})`
+        )
+        setStreaming(true)
+        setError(null)
       } else if (event.type === 'usage') {
         usageRef.current = event.usage
         setUsage(event.usage)

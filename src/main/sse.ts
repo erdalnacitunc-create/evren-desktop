@@ -1,4 +1,12 @@
 import type { ChatUsage, ToolCallInfo } from '../shared/types'
+import {
+  DEFAULT_RETRY_POLICY,
+  describeStatus,
+  isRetryable,
+  nextDelay,
+  sleep,
+  type RetryPolicy
+} from './retry'
 
 export interface CompletionResult {
   content: string
@@ -13,7 +21,92 @@ export interface CompletionDelta {
   text: string
 }
 
+export interface CompletionOptions {
+  /**
+   * Geçici hatada yeniden deneme bilgisi.
+   * `attempt` 1 tabanlıdır (ilk yeniden deneme = 1).
+   */
+  onRetry?: (info: { attempt: number; maxAttempts: number; delayMs: number; reason: string }) => void
+  policy?: RetryPolicy
+}
+
+class StreamHttpError extends Error {
+  status?: number
+  retryAfterMs: number | null
+  constructor(message: string, status: number, retryAfterMs: number | null) {
+    super(message)
+    this.status = status
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
+/**
+ * Sohbet tamamlamasını akıtır.
+ *
+ * Geçici hatalarda (429/5xx/ağ) **henüz içerik akmamışsa** otomatik yeniden
+ * dener; böylece kullanıcı "durdu" yerine devam eden yanıt görür. Kısmi
+ * içerik aktıktan sonra kopan bağlantı yeniden denenmez (tekrar/çift metin
+ * riski); o durumda hata yukarı iletilir.
+ */
 export async function streamCompletion(
+  baseUrl: string,
+  apiKey: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal,
+  onDelta: (delta: CompletionDelta) => void,
+  options: CompletionOptions = {}
+): Promise<CompletionResult> {
+  const policy = options.policy ?? DEFAULT_RETRY_POLICY
+  let attempt = 0
+  let lastError: StreamHttpError | Error | null = null
+
+  while (attempt < policy.maxAttempts) {
+    if (signal.aborted) throw abortError()
+    try {
+      return await streamOnce(baseUrl, apiKey, body, signal, onDelta)
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      const status = (error as { status?: number }).status
+      const retryable = isRetryable({ status, aborted: signal.aborted })
+      const isLast = attempt + 1 >= policy.maxAttempts
+      // Kısmi içerik aktıysa tekrar etmek metni çiftler; dur.
+      const partial = (error as { partial?: boolean }).partial === true
+      if (!retryable || isLast || partial) throw lastError
+
+      const retryAfterMs =
+        error instanceof StreamHttpError ? error.retryAfterMs : null
+      const delayMs = nextDelay(attempt, retryAfterMs, policy)
+      attempt += 1
+      options.onRetry?.({
+        attempt,
+        maxAttempts: policy.maxAttempts,
+        delayMs,
+        reason: describeStatus(status)
+      })
+      await sleep(delayMs, signal)
+    }
+  }
+
+  throw lastError ?? new Error('İstek tamamlanamadı')
+}
+
+function parseRetryAfterHeader(value: string | null): number | null {
+  if (!value) return null
+  const text = value.trim()
+  if (!text) return null
+  if (/^\d+$/.test(text)) return Math.min(Number(text) * 1000, 120_000)
+  const date = Date.parse(text)
+  if (Number.isNaN(date)) return null
+  return Math.max(0, Math.min(date - Date.now(), 120_000))
+}
+
+function abortError(): Error {
+  const error = new Error('İstek iptal edildi') as Error & { status?: number }
+  error.name = 'AbortError'
+  return error
+}
+
+async function streamOnce(
   baseUrl: string,
   apiKey: string,
   body: Record<string, unknown>,
@@ -46,11 +139,11 @@ export async function streamCompletion(
     } catch {
       // yut
     }
-    const error = new Error(String(detail || `HTTP ${res.status}`).slice(0, 500)) as Error & {
-      status?: number
-    }
-    error.status = res.status
-    throw error
+    throw new StreamHttpError(
+      String(detail || `HTTP ${res.status}`).slice(0, 500),
+      res.status,
+      parseRetryAfterHeader(res.headers.get('retry-after'))
+    )
   }
 
   if (!res.body) throw new Error('Yanıt gövdesi yok.')
@@ -65,6 +158,7 @@ export async function streamCompletion(
   let finishReason: string | null = null
   const toolAcc = new Map<number, { id: string; name: string; args: string }>()
 
+  try {
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
@@ -125,6 +219,14 @@ export async function streamCompletion(
       if (chunk.usage) usage = chunk.usage
       if (choice?.finish_reason) finishReason = choice.finish_reason
     }
+  }
+
+  } catch (error) {
+    // Kısmi içerik aktıysa yeniden denemek metni çiftler; işaretle.
+    if (content.length > 0 || reasoning.length > 0) {
+      ;(error as { partial?: boolean }).partial = true
+    }
+    throw error
   }
 
   return { content, reasoning, toolCalls: finalizeTools(toolAcc), usage, finishReason }

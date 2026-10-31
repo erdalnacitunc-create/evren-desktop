@@ -331,7 +331,18 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         apiKey,
         body,
         controller.signal,
-        (delta) => send({ requestId, type: delta.kind, text: delta.text })
+        (delta) => send({ requestId, type: delta.kind, text: delta.text }),
+        {
+          onRetry: (info) =>
+            send({
+              requestId,
+              type: 'retry',
+              attempt: info.attempt,
+              maxAttempts: info.maxAttempts,
+              delayMs: info.delayMs,
+              reason: info.reason
+            })
+        }
       )
 
       if (result.usage) send({ requestId, type: 'usage', usage: result.usage })

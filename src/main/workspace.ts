@@ -1138,8 +1138,17 @@ export async function runWorkspaceCommand(
       `$OutputEncoding=[System.Text.UTF8Encoding]::new($false);`
     : `export LC_ALL=C.UTF-8 LANG=C.UTF-8 2>/dev/null; `
   const effectiveCommand = `${utf8Prefix}${command}`
+  // Windows'ta komutu -Command ile geçmek tırnak/kaçış/uzunluk sorunlarına yol
+  // açar: modelin ürettiği $ değişkenli, çok satırlı veya tırnak yoğun
+  // scriptler sessizce bozulur. -EncodedCommand komutu UTF-16LE + base64
+  // olarak taşır; Windows komut satırı ayrıştırması tamamen devre dışı kalır.
   const args = isWindows
-    ? ['-NoProfile', '-NonInteractive', '-Command', effectiveCommand]
+    ? [
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(effectiveCommand, 'utf16le').toString('base64')
+      ]
     : ['-c', effectiveCommand]
   const env = await withAndroidPath()
 

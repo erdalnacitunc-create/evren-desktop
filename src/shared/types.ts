@@ -415,6 +415,14 @@ export type ChatEvent =
   | { requestId: string; type: 'tool-call'; call: ToolCallInfo }
   | { requestId: string; type: 'tool-result'; result: ToolResultInfo }
   | { requestId: string; type: 'steering'; text: string }
+  | {
+      requestId: string
+      type: 'retry'
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      reason: string
+    }
   | { requestId: string; type: 'approval'; request: AgentApprovalRequest }
   | { requestId: string; type: 'question'; request: AgentQuestionRequest }
   | { requestId: string; type: 'multiverse-start'; members: string[] }

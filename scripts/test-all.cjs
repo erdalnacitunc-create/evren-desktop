@@ -33,6 +33,7 @@ const SUITES = [
   { file: 'scripts/event-sink-test.ts', label: 'Olay çıkış noktası', fast: true },
   { file: 'scripts/transport-protocol-test.ts', label: 'Taşıyıcı protokolü', fast: true },
   { file: 'scripts/transport-socket-test.ts', label: 'Taşıyıcı soket akışı' },
+  { file: 'scripts/headless-auth-test.ts', label: 'Headless API kimlik doğrulama' },
   { file: 'scripts/session-repository-test.ts', label: 'Oturum deposu arayüzü' },
   { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' },
   { file: 'scripts/agent-concurrency-test.ts', label: 'Eşzamanlı ajan koşuları' }

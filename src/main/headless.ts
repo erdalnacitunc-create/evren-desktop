@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { Readable } from 'stream'
 import type { HeadlessStatus } from '../shared/types'
 import { ensureHeadlessToken, loadApiKey, loadHeadlessToken } from './credentials'
+import { extractToken, tokensMatch } from './transport/protocol'
 import { getSettings } from './settings'
 import {
   createSession,
@@ -49,12 +50,24 @@ async function readBody(request: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks)
 }
 
+/**
+ * Headless API istek yetkilendirmesi (saf fonksiyon, test edilebilir).
+ * Sabit zamanlı karşılaştırma: token uzunluğu/başlangıcı sızdırılmaz.
+ */
+export function isAuthorized(
+  expectedToken: string | null | undefined,
+  headers: Record<string, string | string[] | undefined>
+): boolean {
+  if (!expectedToken) return false
+  const provided = extractToken(headers)
+  return tokensMatch(expectedToken, provided)
+}
+
 function authorized(request: IncomingMessage): boolean {
-  if (!currentToken) return false
-  const header = request.headers.authorization ?? ''
-  const bearer = header.replace(/^Bearer\s+/i, '').trim()
-  const custom = String(request.headers['x-evren-token'] ?? '').trim()
-  return (bearer || custom) === currentToken
+  return isAuthorized(currentToken, {
+    authorization: request.headers.authorization,
+    'x-evren-token': request.headers['x-evren-token'] as string | string[] | undefined
+  })
 }
 
 function sessionIdFromPath(pathname: string): string | null {

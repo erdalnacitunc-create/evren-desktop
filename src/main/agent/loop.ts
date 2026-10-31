@@ -31,6 +31,7 @@ import {
 import { randomUUID } from 'crypto'
 import type {
   AgentApprovalRequest,
+  AgentQuestionRequest,
   AppSettings,
   ChatEvent,
   ChatMessage,
@@ -57,6 +58,8 @@ interface AgentRunOptions {
    * Ayrı süreçte bu kaynaklar ana süreçte yaşar.
    */
   hostlessCapabilities?: boolean
+  /** Kullanıcıya soru sorma köprüsü (ayrı süreçte ana sürece gider). */
+  askQuestion?: (request: AgentQuestionRequest) => Promise<string[] | null>
 }
 
 const MAX_STEPS = 20
@@ -238,6 +241,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       : undefined,
     readOnly: profile === 'plan',
     formatOnEdit: settings.hooks?.formatOnEdit === true,
+    askQuestion: options.askQuestion,
     subagentTasks
   })
 

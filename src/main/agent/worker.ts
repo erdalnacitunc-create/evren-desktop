@@ -11,7 +11,13 @@ import {
 } from '../sessionRepository'
 import { runAgent } from './loop'
 import { runWithWorkspace } from '../workspace'
-import type { AppSettings, ChatEvent, ChatRequest } from '../../shared/types'
+import type {
+  AgentApprovalRequest,
+  AgentQuestionRequest,
+  AppSettings,
+  ChatEvent,
+  ChatRequest
+} from '../../shared/types'
 
 /**
  * Ajan işçisi — ayrı süreçte (utilityProcess) çalışan giriş noktası.
@@ -130,6 +136,50 @@ async function runInWorker(input: AgentRunPayload): Promise<{ ok: boolean; error
     }
   }
 
+  // Onay ve soru köprüleri işçide yerel değil: ana süreçteki kullanıcıya
+  // RPC ile gider. Onay atlanmaz — yanıt gelmezse reddedilmiş sayılır.
+  //
+  // İptal edilirse bekleyiş hemen sonlanmalı; aksi halde iptal edilen koşu
+  // kullanıcı yanıtı gelene kadar asılı kalır.
+  const raceAbort = <T>(promise: Promise<T>, fallback: T): Promise<T> => {
+    if (controller.signal.aborted) return Promise.resolve(fallback)
+    return Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve(fallback), { once: true })
+      })
+    ])
+  }
+
+  const approval = async (request: AgentApprovalRequest): Promise<boolean> => {
+    const answer = raceAbort(
+      rpc
+        .request('approval.ask', { requestId: input.requestId, request }, 0)
+        .then((message) => {
+          if (message.kind === 'error') return false
+          return (message.payload as { approved?: boolean })?.approved === true
+        })
+        .catch(() => false),
+      false
+    )
+    return answer
+  }
+
+  const askQuestion = async (request: AgentQuestionRequest): Promise<string[] | null> => {
+    const answers = await raceAbort(
+      rpc
+        .request('question.ask', { requestId: input.requestId, request }, 0)
+        .then((message) => {
+          if (message.kind === 'error') return null
+          const value = (message.payload as { answers?: string[] | null })?.answers
+          return Array.isArray(value) && value.length > 0 ? value : null
+        })
+        .catch(() => null),
+      null
+    )
+    return answers
+  }
+
   try {
     await runWithWorkspace(input.workspaceRoot, () =>
       runAgent({
@@ -143,7 +193,9 @@ async function runInWorker(input: AgentRunPayload): Promise<{ ok: boolean; error
         sink,
         settings: input.settings,
         hostlessCapabilities: true,
-        workspaceRoot: input.workspaceRoot
+        workspaceRoot: input.workspaceRoot,
+        approval,
+        askQuestion
       })
     )
     return { ok: true }

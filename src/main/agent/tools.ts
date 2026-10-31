@@ -2,7 +2,12 @@ import { randomUUID } from 'crypto'
 import { join } from 'path'
 import * as vm from 'vm'
 import { toolCategory } from '../../shared/permissions'
-import type { ChatEvent, PermissionCategory, TodoItem } from '../../shared/types'
+import type {
+  AgentQuestionRequest,
+  ChatEvent,
+  PermissionCategory,
+  TodoItem
+} from '../../shared/types'
 import { callMcpTool, listServerTools, type AgentMcpTool } from '../mcp/manager'
 import {
   callMcpToolAsTask,
@@ -193,6 +198,12 @@ export function createTools(options: {
   readOnly?: boolean
   /** Düzenleme sonrası Prettier kancası. Ayar okuması çağıranda kalır. */
   formatOnEdit?: boolean
+  /**
+   * Kullanıcıya soru sorma köprüsü.
+   * Verilmezse olay yayınlanır ve yerel köprü beklenir (ana süreç).
+   * Ayrı süreçte ana sürece RPC ile iletilir.
+   */
+  askQuestion?: (request: AgentQuestionRequest) => Promise<string[] | null>
   subagentTasks?: {
     spawn: (
       agentType: 'explore' | 'review' | 'general',
@@ -1640,7 +1651,7 @@ export function createTools(options: {
     execute: async (args, ctx) => {
       const questionId = randomUUID()
       const rawOptions = Array.isArray(args.options) ? args.options : []
-      const options = rawOptions
+      const questionOptions = rawOptions
         .map((value) => {
           if (typeof value === 'string') return { label: value.trim() }
           if (value && typeof value === 'object') {
@@ -1657,20 +1668,27 @@ export function createTools(options: {
         .filter((value): value is { label: string; description?: string } => !!value)
         .slice(0, 12)
 
-      ctx.send({
+      const questionRequest: AgentQuestionRequest = {
         requestId: ctx.requestId,
-        type: 'question',
-        request: {
-          requestId: ctx.requestId,
-          question: {
-            id: questionId,
-            header: str(args.header, 'Soru').slice(0, 60),
-            question: str(args.question),
-            options,
-            multiple: args.multiple === true
-          }
+        question: {
+          id: questionId,
+          header: str(args.header, 'Soru').slice(0, 60),
+          question: str(args.question),
+          options: questionOptions,
+          multiple: args.multiple === true
         }
-      })
+      }
+
+      if (options.askQuestion) {
+        // Ayrı süreç: ana süreç olayı yayınlar ve yanıtı geri iletir.
+        const answers = await options.askQuestion(questionRequest)
+        if (!answers || answers.length === 0) {
+          return { ok: false, content: 'Kullanıcı soruyu yanıtlamadı veya iptal etti.' }
+        }
+        return { ok: true, content: `Kullanıcı yanıtı: ${answers.join(", ")}` }
+      }
+
+      ctx.send({ requestId: ctx.requestId, type: 'question', request: questionRequest })
 
       const answers = await waitForQuestion(
         ctx.requestId,

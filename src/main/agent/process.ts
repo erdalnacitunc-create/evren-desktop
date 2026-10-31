@@ -6,8 +6,16 @@ import { RpcEndpoint } from '../transport/rpc'
 import { createSessionHandler } from '../transport/remoteSessionRepository'
 import { createMessage, type TransportMessage } from '../transport/protocol'
 import { sessions } from '../sessionRepository'
+import { approvalKey, rejectAllForRequest, waitForApproval } from './approval'
+import { rejectAllQuestions, waitForQuestion } from './question'
 import type { AgentEventSink } from './eventSink'
-import type { AppSettings, ChatEvent, ChatRequest } from '../../shared/types'
+import type {
+  AgentApprovalRequest,
+  AgentQuestionRequest,
+  AppSettings,
+  ChatEvent,
+  ChatRequest
+} from '../../shared/types'
 
 /**
  * Ajan süreci gözetmeni.
@@ -50,6 +58,8 @@ export class AgentProcess {
   private starting: Promise<void> | null = null
   /** İstek kimliği → olay sink'i (eşzamanlı koşular için). */
   private sinks = new Map<string, AgentEventSink>()
+  /** İstek kimliği → koşu denetleyicisi (onay/soru iptali için). */
+  private runControllers = new Map<string, AbortController>()
   private readonly options: AgentProcessOptions
 
   constructor(options: AgentProcessOptions = {}) {
@@ -103,6 +113,45 @@ export class AgentProcess {
         },
         handler: async (message) => {
           const method = String(message.method ?? '')
+
+          // İşçiden gelen onay/soru istekleri kullanıcıya iletilir.
+          if (method === 'approval.ask') {
+            const payload = (message.payload ?? {}) as {
+              requestId?: string
+              request?: AgentApprovalRequest
+            }
+            const request = payload.request
+            if (!request) throw new Error('Onay isteği eksik')
+            const sink = this.sinks.get(String(payload.requestId ?? request.requestId))
+            sink?.emit({ requestId: request.requestId, type: 'approval', request })
+            const controller = this.runControllers.get(request.requestId)
+            if (!controller) return { approved: false }
+            const approved = await waitForApproval(
+              approvalKey(request.requestId, request.toolCallId),
+              controller
+            )
+            return { approved }
+          }
+
+          if (method === 'question.ask') {
+            const payload = (message.payload ?? {}) as {
+              requestId?: string
+              request?: AgentQuestionRequest
+            }
+            const request = payload.request
+            if (!request) throw new Error('Soru isteği eksik')
+            const sink = this.sinks.get(String(payload.requestId ?? request.requestId))
+            sink?.emit({ requestId: request.requestId, type: 'question', request })
+            const controller = this.runControllers.get(request.requestId)
+            if (!controller) return { answers: null }
+            const answers = await waitForQuestion(
+              request.requestId,
+              request.question.id,
+              controller.signal
+            )
+            return { answers }
+          }
+
           if (!method.startsWith('session.')) {
             throw Object.assign(new Error(`Bilinmeyen yöntem: ${method}`), {
               code: 'unknown-method'
@@ -204,6 +253,9 @@ export class AgentProcess {
       rpc.eventHandler = this.dispatchEvent
     }
     this.sinks.set(input.requestId, sink)
+    // İşçiden gelen onay/soru bekleyişleri bu denetleyiciyle iptal edilir.
+    const runController = new AbortController()
+    this.runControllers.set(input.requestId, runController)
 
     try {
       const message = await rpc.request('agent.run', input, 0)
@@ -214,6 +266,11 @@ export class AgentProcess {
       return (message.payload ?? { ok: true }) as { ok: boolean; error?: string }
     } finally {
       this.sinks.delete(input.requestId)
+      this.runControllers.delete(input.requestId)
+      runController.abort()
+      // Bekleyen onay/soru varsa reddedilir; kullanıcı yanıtı boşa gitmez.
+      rejectAllForRequest(input.requestId)
+      rejectAllQuestions(input.requestId)
     }
   }
 

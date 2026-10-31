@@ -27,6 +27,11 @@ chmod +x "EVREN Desktop-0.3.0.AppImage"
 ./"EVREN Desktop-0.3.0.AppImage"
 ```
 
+> Not: GitHub, yükleme sırasında dosya adındaki boşlukları noktaya çevirir.
+> İndirdiğiniz dosya `EVREN.Desktop-0.3.0.AppImage` olarak görünebilir;
+> `chmod +x` ile çalıştırın. Sağlama toplamı için `SHA256SUMS-linux.txt`
+> dosyasındaki ada bakın.
+
 ## Derleme
 
 Linux paketleri **Linux runner üzerinde** üretilir; Windows'ta cross-build

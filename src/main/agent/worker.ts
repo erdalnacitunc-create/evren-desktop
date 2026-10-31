@@ -1,20 +1,24 @@
 import {
   PROTOCOL_VERSION,
   createMessage,
-  decodeMessage,
-  encodeMessage,
   type TransportMessage
 } from '../transport/protocol'
+import { RpcEndpoint } from '../transport/rpc'
+import { createRemoteSessionRepository } from '../transport/remoteSessionRepository'
+import {
+  resetSessionRepository,
+  setSessionRepository
+} from '../sessionRepository'
 
 /**
  * Ajan işçisi — ayrı süreçte (utilityProcess) çalışan giriş noktası.
  *
- * Bu adımda yalnızca yaşam döngüsü: süreç ayağa kalkıyor, ping'e pong
- * yanıtlıyor, protokol dışı mesajı reddediyor ve ebeveyn kapandığında
- * kendini sonlandırıyor. Gerçek ajan işi sonraki adımlarda eklenecek.
- *
- * Taşıma: `process.parentPort` üzerinden NDJSON satırları (structured clone
- * ile string taşınır). Böylece protokol katmanı soket ve süreç arasında aynı.
+ * Taşıma: `process.parentPort` üzerinden NDJSON satırları.
+ * Bu adımda işçi:
+ *  - ping/pong ile canlılık bildirir
+ *  - oturum deposunu **uzak** olarak kullanır (ana süreç tek yazar)
+ *  - oturum isteklerini ana sürece iletir
+ * Gerçek ajan döngüsü sonraki adımda devralınacak.
  */
 
 interface ParentPortLike {
@@ -25,103 +29,70 @@ interface ParentPortLike {
 const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort
 
 if (!parentPort) {
-  // Doğrudan `node` ile çalıştırıldıysa sessizce ölme; anlaşılır hata ver.
   process.stderr.write('[agent-worker] parentPort yok; utilityProcess ile başlatılmalı\n')
   process.exit(2)
 }
 
-/** İşçinin durumu (ileride istek tablosu buraya gelecek). */
 const state = {
   startedAt: Date.now(),
-  requests: 0,
-  lastPingAt: null as number | null
+  requests: 0
 }
 
-function reply(message: TransportMessage): void {
-  parentPort!.postMessage(encodeMessage(message))
-}
-
-function handle(message: TransportMessage): void {
-  if (message.kind === 'ping') {
-    state.lastPingAt = Date.now()
-    reply(
-      createMessage('pong', message.id, {
-        payload: {
-          pid: process.pid,
-          uptimeMs: Date.now() - state.startedAt,
-          requests: state.requests,
-          protocol: PROTOCOL_VERSION
-        }
-      })
-    )
-    return
-  }
-
-  if (message.kind === 'request') {
-    state.requests += 1
+const rpc = new RpcEndpoint({
+  send: (line) => parentPort!.postMessage(line),
+  defaultTimeoutMs: 30_000,
+  log: (level, message) => {
+    if (level === 'warn') process.stderr.write(`[agent-worker] ${message}\n`)
+  },
+  handler: async (message) => {
     if (message.method === 'ping') {
-      state.lastPingAt = Date.now()
-      reply(
-        createMessage('response', message.id, {
-          payload: {
-            pid: process.pid,
-            uptimeMs: Date.now() - state.startedAt,
-            requests: state.requests,
-            protocol: PROTOCOL_VERSION
-          }
-        })
-      )
-      return
+      return {
+        pid: process.pid,
+        uptimeMs: Date.now() - state.startedAt,
+        requests: state.requests,
+        protocol: PROTOCOL_VERSION
+      }
     }
     if (message.method === 'shutdown') {
-      reply(createMessage('response', message.id, { payload: { ok: true } }))
-      setTimeout(() => process.exit(0), 10)
-      return
+      setImmediate(() => process.exit(0))
+      return { ok: true }
     }
-    reply(
-      createMessage('error', message.id, {
-        payload: { message: `Bilinmeyen yöntem: ${String(message.method)}`, code: 'unknown-method' }
-      })
-    )
-    return
-  }
-
-  // cancel/event/response gibi türler bu adımda işlenmez.
-  reply(
-    createMessage('error', message.id, {
-      payload: { message: `Bu tür işlenmiyor: ${message.kind}`, code: 'unsupported-kind' }
+    if (message.method === 'session.probe') {
+      // Oturum deposunun gerçekten uzak olduğunu kanıtlar.
+      const repo = await (await import('../sessionRepository')).sessions()
+      const list = await repo.list()
+      return { ok: true, sessions: list.length }
+    }
+    throw Object.assign(new Error(`Bilinmeyen yöntem: ${String(message.method)}`), {
+      code: 'unknown-method'
     })
-  )
-}
+  }
+})
+
+// İşçide oturum deposu uzaktır: ana süreç tek yazardır.
+setSessionRepository(createRemoteSessionRepository(rpc))
+
+process.on('exit', () => resetSessionRepository())
 
 parentPort.on('message', (event) => {
   const data = event?.data
   if (typeof data !== 'string') {
     parentPort!.postMessage(
-      encodeMessage(
-        createMessage('error', 'unknown', {
-          payload: { message: 'Çerçeve string değil', code: 'bad-frame' }
-        })
-      )
+      JSON.stringify({
+        v: PROTOCOL_VERSION,
+        kind: 'error',
+        id: 'unknown',
+        payload: { message: 'Çerçeve string değil', code: 'bad-frame' }
+      }) + '\n'
     )
     return
   }
-
-  for (const line of data.split('\n')) {
-    if (!line.trim()) continue
-    const decoded = decodeMessage(line)
-    if (!decoded.ok) {
-      parentPort!.postMessage(
-        encodeMessage(createMessage('error', 'unknown', { payload: decoded.error }))
-      )
-      continue
-    }
-    handle(decoded.message)
-  }
+  for (const line of data.split('\n')) rpc.handleLine(line)
 })
 
-// Ebeveyn bağlantısı kesilirse süreç kendini kapatmalı; aksi halde
-// görünmez bir yetim süreç kalır.
 process.on('disconnect', () => process.exit(0))
 process.on('SIGTERM', () => process.exit(0))
 process.on('SIGINT', () => process.exit(0))
+
+export type { TransportMessage }
+export { createMessage }

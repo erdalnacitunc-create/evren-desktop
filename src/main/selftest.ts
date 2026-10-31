@@ -103,6 +103,21 @@ export async function runSelfTest(): Promise<void> {
     }
   }
 
+  // Ajan süreci: paketli yapıda worker'ın gerçekten başladığını doğrular.
+  if (process.env['EVREN_SELFTEST_WORKER'] === '1') {
+    try {
+      const { agentProcess, stopAgentProcess } = await import('./agent/process')
+      const agent = agentProcess()
+      const pong = await agent.ping(20_000)
+      lines.push(`agent_worker_running=${agent.status().running} pid=${pong.pid ?? 'yok'}`)
+      lines.push(`agent_worker_protocol=${pong.protocol ?? 'yok'}`)
+      await stopAgentProcess()
+      lines.push(`agent_worker_stopped=${agent.status().running === false}`)
+    } catch (error) {
+      lines.push(`agent_worker_error=${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   if (key) {
     const settings = await getSettings()
     lines.push(`base_url=${settings.baseUrl}`)

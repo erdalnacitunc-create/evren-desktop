@@ -188,11 +188,11 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-## 0.2.5 Beta
+## 0.3.0 Beta
 
 ### Windows x64
-- Kurulum: `release/EVREN-Desktop-Setup-0.2.5-x64.exe`
-- Portable: `release/EVREN-Desktop-0.2.5-portable-x64.zip`
+- Kurulum: `release/EVREN-Desktop-Setup-0.3.0-x64.exe`
+- Portable: `release/EVREN-Desktop-0.3.0-portable-x64.zip`
 - Kullanıcı bazlı NSIS kurulumu
 - Ayrı beta profili: `%APPDATA%\EVREN Desktop Beta`
 - API anahtarı/token/session içermez
@@ -203,11 +203,39 @@ npm run build:win  # Windows NSIS kurulum paketi
 - Ayrıntılar: `docs/PARDUS.md`
 
 ### Bu sürümde yeni
-- Onboarding penceresinde küçült / büyüt / kapat kontrolleri
-- `electron-updater` tabanlı otomatik güncelleme paneli
-- Pardus `.deb` + AppImage paketleme
-- Linux CI (GitHub Actions / Ubuntu)
-- Önceki sürümlerdeki MCP, terminal, ACP, GitHub App ve hafıza özellikleri
+
+**Güvenlik**
+- Tüm IPC kanallarında gönderici doğrulaması: alt çerçeve, yabancı origin ve
+  renderer dışı dosya yolları reddedilir
+- Headless API token karşılaştırması sabit zamanlı
+- Kural tabanlı izinler: komut, yol veya URL başına `allow` / `ask` / `deny`
+
+**Günlük ve tanılama**
+- `electron-log` tabanlı yapılandırılmış günlük, 5 MB'ta dönüş
+- API anahtarı, GitHub token ve `Bearer` değerleri yazılmadan maskelenir
+- Ayarlar → Genel → Günlükler: günlük klasörünü aç
+
+**Sohbet deneyimi**
+- Yanıt sürerken mesaj yazma: ajan açıkken araya girme, düz akışta sıraya alma
+- İstem geçmişi: `Alt+↑` / `Alt+↓` ile geri/ileri, taslak korunur
+
+**Arayüz**
+- Türkçe + İngilizce dil seçimi (Ayarlar → Genel → Dil)
+- Gerçek PTY terminali (xterm.js): renkler, imleç, `vim`/`ssh`, doğru `Ctrl+C`
+
+**Araçlar**
+- Lighthouse denetimi (`lighthouse_audit`): performans, erişilebilirlik,
+  en iyi uygulamalar, SEO
+
+**Mimari**
+- Ajan isteğe bağlı olarak ayrı süreçte çalışabilir
+  (`EVREN_AGENT_PROCESS=worker`, varsayılan kapalı)
+- Oturum deposu arayüz arkasında; tek yazar ilkesi korunur
+
+### Bilinen sınırlar
+- Ajan süreci varsayılan olarak kapalıdır; ana süreç yolu kullanılır
+- Arayüzün bir bölümü hâlâ yalnızca Türkçe (bkz. `docs/I18N.md`)
+- Windows yayıncı imzası yok; SmartScreen uyarısı gösterebilir
 
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.

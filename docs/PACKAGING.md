@@ -15,7 +15,7 @@ npm run build:win
 
 Çıktılar `release/` altında oluşur:
 
-- `EVREN-Desktop-Setup-0.2.5-x64.exe` — NSIS kurulum dosyası
+- `EVREN-Desktop-Setup-0.3.0-x64.exe` — NSIS kurulum dosyası
 - `win-unpacked/` — kurulum gerektirmeyen çalıştırılabilir sürüm
 
 ## Yapılandırma

@@ -2,9 +2,14 @@ name: Linux build (Pardus)
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Yayına eklenecek sürüm etiketi (örn. v0.3.0-beta.1). Boşsa yalnızca artifact üretilir.'
+        required: false
+        type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-linux:
@@ -38,22 +43,27 @@ jobs:
       - name: Checksums
         run: |
           cd release
-          sha256sum *.deb *.AppImage > SHA256SUMS.txt || true
+          sha256sum *.deb *.AppImage > SHA256SUMS-linux.txt
+          cat SHA256SUMS-linux.txt
 
-      - name: Upload Debian package
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: evren-desktop-deb
+          name: evren-desktop-linux
           path: |
             release/*.deb
-            release/SHA256SUMS.txt
+            release/*.AppImage
+            release/SHA256SUMS-linux.txt
           if-no-files-found: error
 
-      - name: Upload AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: evren-desktop-appimage
-          path: |
-            release/*.AppImage
-            release/SHA256SUMS.txt
-          if-no-files-found: error
+      - name: Attach to release
+        if: ${{ inputs.tag != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release upload "$TAG" \
+            release/*.deb \
+            release/*.AppImage \
+            release/SHA256SUMS-linux.txt \
+            --repo "$GITHUB_REPOSITORY" --clobber

@@ -293,6 +293,18 @@ export class AgentProcess {
     return (message.payload as { ok?: boolean })?.ok === true
   }
 
+  /** İşçide çalışan bir koşuya kullanıcı mesajı ekler (steering). */
+  async steerInWorker(
+    requestId: string,
+    text: string
+  ): Promise<{ queued: boolean; pending: number }> {
+    if (!this.rpc) return { queued: false, pending: 0 }
+    const message = await this.request('agent.steer', { requestId, text }, 10_000)
+    if (message.kind === 'error') return { queued: false, pending: 0 }
+    const payload = (message.payload ?? {}) as { queued?: boolean; pending?: number }
+    return { queued: payload.queued === true, pending: payload.pending ?? 0 }
+  }
+
   /** ping → pong turu; süreç canlı mı? */
   async ping(timeoutMs = 5_000): Promise<{ pid?: number; uptimeMs?: number; protocol?: number }> {
     const message = await this.request('ping', {}, timeoutMs)
@@ -352,6 +364,9 @@ export class AgentProcess {
 
 /** `out/main/agentWorker.js` — ana süreç paketiyle aynı klasörde. */
 function defaultWorkerPath(): string {
+  // Test/hata ayıklama: derlenmiş çıktı başka klasördeyse yol verilebilir.
+  const override = process.env['EVREN_AGENT_WORKER']
+  if (override && override.trim()) return override
   return join(__dirname, 'agentWorker.js')
 }
 

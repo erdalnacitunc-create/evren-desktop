@@ -27,6 +27,7 @@ import {
 } from './updater'
 import { openExternalSafe } from './safeOpen'
 import { initSubagentTaskStore, resumeInterruptedSubagentTasks } from './agent/taskManager'
+import { stopAgentProcess } from './agent/process'
 import { getSettings } from './settings'
 import { cleanupTemporaryWorkspaces } from './workspace'
 import { loadWindowState, trackWindowState } from './windowState'
@@ -398,6 +399,7 @@ app.on('before-quit', () => {
   tray?.destroy()
   tray = null
   abortAllChats()
+  void stopAgentProcess()
   void disconnectAllMcp()
   void unloadAllPlugins()
   void cleanupInspectCache()

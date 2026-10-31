@@ -20,14 +20,16 @@ import { sessions } from './sessionRepository'
 import { buildMemoryContext } from './memory/retrieve'
 import { streamCompletion } from './sse'
 import { buildBaseBody, toErrorEvent } from './chatShared'
-import type { ChatEvent, ChatRequest, ChatUsage } from '../shared/types'
+import type { AppSettings, ChatEvent, ChatRequest, ChatUsage } from '../shared/types'
 import {
   applyStreamEvent,
   belongsToRequest,
   emptyStreamState,
   type StreamState
 } from './chatStreamTracker'
-import { asSink } from './agent/eventSink'
+import { asSink, type AgentEventSink } from './agent/eventSink'
+import { agentProcess } from './agent/process'
+import { createLogger } from './logger'
 
 const controllers = new Map<string, AbortController>()
 /**
@@ -35,16 +37,80 @@ const controllers = new Map<string, AbortController>()
  * Düz akışlarda mesaj kaybolmasın diye burada işaretlenir.
  */
 const steerable = new Set<string>()
+/** İşçi sürecinde çalışan istekler (iptal/steering yönlendirmesi için). */
+const workerRequests = new Set<string>()
+
+/**
+ * Ajanı ayrı süreçte çalıştırma anahtarı.
+ * `EVREN_AGENT_PROCESS=worker` → işçi; aksi halde ana süreç (varsayılan).
+ * Tek ortam değişkeniyle geri alınabilir olması bilinçli bir güvenlik ağıdır.
+ */
+export function useWorkerForAgent(): boolean {
+  return (process.env['EVREN_AGENT_PROCESS'] ?? '').toLowerCase() === 'worker'
+}
+
+/**
+ * Ajanı işçide koşturur ve hata durumunu kullanıcıya olay olarak iletir.
+ * Çökme sessiz kalmaz: `error` olayı renderer'a düşer.
+ */
+async function runAgentInWorker(input: {
+  requestId: string
+  baseUrl: string
+  apiKey: string
+  payload: ChatRequest
+  settings: AppSettings
+  workspaceRoot: string | null
+  sink: AgentEventSink
+  controller: AbortController
+}): Promise<void> {
+  const log = createLogger('chat/worker')
+  try {
+    const result = await agentProcess().runAgentInWorker(
+      {
+        requestId: input.requestId,
+        baseUrl: input.baseUrl,
+        apiKey: input.apiKey,
+        payload: input.payload,
+        settings: input.settings,
+        workspaceRoot: input.workspaceRoot
+      },
+      input.sink
+    )
+    if (!result.ok) log.warn(`Ajan işçisi hata döndürdü: ${result.error ?? 'bilinmiyor'}`)
+    if (!result.ok && !input.controller.signal.aborted) {
+      input.sink.emit({
+        requestId: input.requestId,
+        type: 'error',
+        error: result.error ?? 'Ajan süreci hatası'
+      })
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    log.error(`Ajan süreci kullanılamadı: ${message}`)
+    if (input.controller.signal.aborted) return
+    input.sink.emit({
+      requestId: input.requestId,
+      type: 'error',
+      error: `Ajan süreci kullanılamadı: ${message}`
+    })
+  }
+}
 
 export function abortAllChats(): void {
   for (const [requestId, controller] of controllers) {
     rejectAllForRequest(requestId)
     rejectAllQuestions(requestId)
     clearSteering(requestId)
+    if (workerRequests.has(requestId)) {
+      void agentProcess()
+        .cancelInWorker(requestId)
+        .catch(() => undefined)
+    }
     controller.abort()
   }
   controllers.clear()
   steerable.clear()
+  workerRequests.clear()
 }
 
 export function abortChat(requestId: string): boolean {
@@ -53,7 +119,15 @@ export function abortChat(requestId: string): boolean {
   rejectAllForRequest(requestId)
   rejectAllQuestions(requestId)
   clearSteering(requestId)
+  if (workerRequests.has(requestId)) {
+    // İşçide çalışan koşu ayrıca iptal edilmeli; aksi halde süreç iş görmeye
+    // devam eder ve kullanıcı "durdurdu" sanır.
+    void agentProcess()
+      .cancelInWorker(requestId)
+      .catch(() => undefined)
+  }
   steerable.delete(requestId)
+  workerRequests.delete(requestId)
   controller.abort()
   controllers.delete(requestId)
   return true
@@ -68,6 +142,16 @@ export function steerChat(requestId: string, text: string): { queued: boolean; p
   if (!controllers.has(requestId) || !steerable.has(requestId)) {
     return { queued: false, pending: 0 }
   }
+
+  if (workerRequests.has(requestId)) {
+    // İşçideki kuyruğa yazılır; ana süreçteki kuyruk kullanılmaz.
+    void agentProcess()
+      .steerInWorker(requestId, text)
+      .catch(() => undefined)
+    // Bildirim amaçlı: işçi gerçek sayıyı döndürür ama arayüz beklemez.
+    return { queued: true, pending: 1 }
+  }
+
   const queued = pushSteering(requestId, text)
   return { queued, pending: countSteering(requestId) }
 }
@@ -206,6 +290,7 @@ export async function startChat(
     void runWithWorkspace(workspaceRoot, task).finally(() => {
       controllers.delete(requestId)
       steerable.delete(requestId)
+      workerRequests.delete(requestId)
       clearSteering(requestId)
     })
   }
@@ -223,18 +308,36 @@ export async function startChat(
     )
   } else if (augmentedPayload.agent?.enabled) {
     steerable.add(requestId)
-    runScoped(() =>
-      runAgent({
-        requestId,
-        webContentsId,
-        baseUrl: settings.baseUrl,
-        apiKey: key,
-        payload: augmentedPayload,
-        controller,
-        sink: asSink(send),
-        workspaceRoot
-      })
-    )
+    // Süreç ayrımı: ajan işçide koşabilir. Varsayılan ana süreçtir;
+    // EVREN_AGENT_PROCESS=worker ile işçiye devredilir (tek satırla geri alınır).
+    if (useWorkerForAgent()) {
+      workerRequests.add(requestId)
+      runScoped(() =>
+        runAgentInWorker({
+          requestId,
+          baseUrl: settings.baseUrl,
+          apiKey: key,
+          payload: augmentedPayload,
+          settings,
+          workspaceRoot,
+          sink: asSink(send),
+          controller
+        })
+      )
+    } else {
+      runScoped(() =>
+        runAgent({
+          requestId,
+          webContentsId,
+          baseUrl: settings.baseUrl,
+          apiKey: key,
+          payload: augmentedPayload,
+          controller,
+          sink: asSink(send),
+          workspaceRoot
+        })
+      )
+    }
   } else {
     runScoped(() =>
       streamChat(

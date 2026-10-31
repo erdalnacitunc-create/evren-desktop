@@ -40,7 +40,9 @@ const SUITES = [
   { file: 'scripts/agent-process-test.ts', label: 'Ajan süreci yaşam döngüsü', needsBuild: true },
   { file: 'scripts/remote-session-test.ts', label: 'Uzak oturum deposu', needsBuild: true },
   { file: 'scripts/worker-agent-test.ts', label: 'İşçide ajan çalıştırma', needsBuild: true },
-  { file: 'scripts/worker-approval-test.ts', label: 'İşçide onay ve soru köprüsü', needsBuild: true }
+  { file: 'scripts/worker-approval-test.ts', label: 'İşçide onay ve soru köprüsü', needsBuild: true },
+  { file: 'scripts/chat-worker-test.ts', label: 'Üretim yolundan işçiye devretme', needsBuild: true },
+  { file: 'scripts/parity-test.ts', label: 'Ana süreç / işçi davranış eşliği', needsBuild: true }
 ]
 
 const args = process.argv.slice(2)

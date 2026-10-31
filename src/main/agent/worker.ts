@@ -10,6 +10,7 @@ import {
   setSessionRepository
 } from '../sessionRepository'
 import { runAgent } from './loop'
+import { countSteering, pushSteering } from './steering'
 import { runWithWorkspace } from '../workspace'
 import type {
   AgentApprovalRequest,
@@ -104,6 +105,17 @@ const rpc = new RpcEndpoint({
       if (!controller) return { ok: false, reason: 'not-found' }
       controller.abort()
       return { ok: true }
+    }
+
+    if (method === 'agent.steer') {
+      const { requestId, text } = (message.payload ?? {}) as {
+        requestId?: string
+        text?: string
+      }
+      if (!requestId || !text) return { queued: false, pending: 0 }
+      // İşçi tarafındaki kuyruğa yazılır; döngü adım sınırında boşaltır.
+      const queued = pushSteering(requestId, text)
+      return { queued, pending: countSteering(requestId) }
     }
 
     throw Object.assign(new Error(`Bilinmeyen yöntem: ${method}`), {

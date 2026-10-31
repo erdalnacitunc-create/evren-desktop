@@ -14,7 +14,7 @@ Bu sayfa mevcut durumu ve sınırları kaydeder.
 | Uzak `SessionRepository` | ✅ işçi `sessions.json`'a yazmaz |
 | Uzak `AgentEventSink` | ✅ olaylar `event` mesajlarıyla ana sürece akar |
 | Onay/soru köprülerinin taşınması | ⏳ (işçide onay yok; otomatik mod) |
-| Üretimde ajanı işçiye devretme | ⏳ (şu an ana süreçte çalışıyor) |
+| Üretimde ajanı işçiye devretme | ✅ EVREN_AGENT_PROCESS=worker |
 
 ## Dosyalar
 
@@ -84,9 +84,38 @@ metin akışı, araç çağrısıyla **gerçek dosya yazımı**, oturum erişimi
 olması, iki eşzamanlı koşunun olaylarının karışmaması, iptal (`done/aborted`) ve
 kapanış.
 
-## Sırada (10b-4)
+## Üretimde devretme
 
-1. Onay/soru köprülerinin işçiye taşınması (şu an işçide onay yok)
-2. Üretimde `startChat`'in ajan dalını işçiye devretmesi
-3. Anahtarın işçi belleğinde uzun süre kalmaması için istek başına geçirilmesi
-4. Süreç çökerse koşunun yeniden başlatılması veya kullanıcıya bildirilmesi
+Ajan varsayılan olarak **ana süreçte** çalışır. İşçiye devretmek için:
+
+```bash
+EVREN_AGENT_PROCESS=worker
+```
+
+Tek ortam değişkeniyle açılıp kapanması bilinçli bir güvenlik ağıdır: sorun
+çıkarsa uygulamayı yeniden başlatmak yeterlidir, kod değişikliği gerekmez.
+
+Devredildiğinde:
+
+| Davranış | Yol |
+|---|---|
+| Ajan döngüsü | işçi süreci |
+| Olaylar | `event` mesajları → ana süreçteki sink → renderer |
+| Oturum yazımı | ana süreç (işçi dosyaya yazmaz) |
+| Onay / soru | ana süreçteki kullanıcı (RPC) |
+| Steering | `agent.steer` → işçi kuyruğu |
+| Durdur | `agent.cancel` + yerel abort |
+| Süreç çökmesi | `error` olayı renderer'a düşer, koşu sessizce kaybolmaz |
+| Uygulama kapanışı | `stopAgentProcess()` — yetim süreç kalmaz |
+
+## Eşlik (parity)
+
+Aynı senaryo iki yolda koşulup karşılaştırılır
+(`scripts/parity-test.ts`): olay türleri, metin, araç sonucu ve bitiş nedeni
+**birebir aynı** olmalıdır. Devretme davranışı değiştirmemeli.
+
+## Sırada
+
+1. `EVREN_AGENT_PROCESS=worker` varsayılana alınmadan önce uzun süreli kullanım testi
+2. İşçi çökerse koşunun otomatik yeniden başlatılması (şu an hata bildirilir)
+3. API anahtarının işçi belleğinde daha kısa süre kalması

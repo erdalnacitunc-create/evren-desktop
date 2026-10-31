@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import type { Dirent } from 'fs'
 import { execFile, spawn } from 'child_process'
 import { AsyncLocalStorage } from 'async_hooks'
+import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import {
   basename,
@@ -72,8 +73,21 @@ interface ChangeMeta {
   existed: boolean
 }
 
+/**
+ * Kullanıcı verisi kökü.
+ *
+ * Ayrı süreçte (utilityProcess) `app` yoktur; ana süreç `EVREN_USER_DATA`
+ * ortam değişkenini geçirir. Böylece yedekler/kontrol noktaları iki süreçte
+ * de **aynı** klasöre yazılır ve geri alma süreçler arası çalışır.
+ */
+function userDataDir(): string {
+  const fromEnv = process.env['EVREN_USER_DATA']
+  if (fromEnv && fromEnv.trim()) return fromEnv
+  return app.getPath('userData')
+}
+
 function backupRoot(): string {
-  return join(app.getPath('userData'), 'workspace-backups')
+  return join(userDataDir(), 'workspace-backups')
 }
 
 function normalizeRel(input: string): string {
@@ -134,8 +148,21 @@ const TEMP_WORKSPACE_DIR = 'evren-workspaces'
 const TEMP_WORKSPACE_MARKER = '.evren-workspace.json'
 const TEMP_WORKSPACE_TTL_MS = 24 * 60 * 60 * 1000
 
+/** Geçici klasör kökü; ayrı süreçte `app` yoksa os tmp kullanılır. */
+function tempDir(): string {
+  const fromEnv = process.env['EVREN_TEMP_DIR']
+  if (fromEnv && fromEnv.trim()) return fromEnv
+  try {
+    const fromApp = app?.getPath?.('temp')
+    if (fromApp) return fromApp
+  } catch {
+    // ayrı süreçte app yok
+  }
+  return tmpdir()
+}
+
 function tempWorkspaceBase(): string {
-  return join(app.getPath('temp'), TEMP_WORKSPACE_DIR)
+  return join(tempDir(), TEMP_WORKSPACE_DIR)
 }
 
 export function isTemporaryWorkspacePath(value: string | null | undefined): boolean {

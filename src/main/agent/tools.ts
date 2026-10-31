@@ -176,9 +176,8 @@ function findTreeEntry(entries: WorkspaceEntry[], target: string): WorkspaceEntr
   return null
 }
 
-async function applyFormatHook(path: string): Promise<string> {
-  const settings = await getSettings()
-  if (!settings.hooks?.formatOnEdit) return ''
+async function applyFormatHook(path: string, enabled: boolean): Promise<string> {
+  if (!enabled) return ''
   const result = await formatWorkspaceFile(path)
   if (!result) return '\n\nFormat hook: projede Prettier bulunamadı.'
   return `\n\nFormat hook: ${result.ok ? 'uygulandı' : 'hata'}\n${result.output}`.slice(0, 6000)
@@ -192,6 +191,8 @@ export function createTools(options: {
   pluginTools?: AgentPluginTool[]
   workspace?: { root: string; sessionId?: string }
   readOnly?: boolean
+  /** Düzenleme sonrası Prettier kancası. Ayar okuması çağıranda kalır. */
+  formatOnEdit?: boolean
   subagentTasks?: {
     spawn: (
       agentType: 'explore' | 'review' | 'general',
@@ -823,7 +824,7 @@ export function createTools(options: {
           ctx.checkpointId
         )
         const diff = result.diff ? `\n\n${result.diff.slice(0, 12_000)}` : ''
-        const format = await applyFormatHook(result.path)
+        const format = await applyFormatHook(result.path, options.formatOnEdit === true)
         return {
           ok: true,
           content: `Yazıldı: ${result.path} (${result.bytes} bayt)${diff}${format}`,
@@ -858,7 +859,7 @@ export function createTools(options: {
           ctx.checkpointId
         )
         const diff = result.diff ? `\n\n${result.diff.slice(0, 12_000)}` : ''
-        const format = await applyFormatHook(result.path)
+        const format = await applyFormatHook(result.path, options.formatOnEdit === true)
         return {
           ok: true,
           content: `Düzenlendi: ${result.path} (${result.bytes} bayt)${diff}${format}`,

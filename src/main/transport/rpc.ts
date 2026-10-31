@@ -25,25 +25,27 @@ export interface RpcEndpointOptions {
   /** Gelen istekleri işleyen fonksiyon. */
   handler?: (message: TransportMessage) => Promise<unknown> | unknown
   /** Gelen olayları (kind=event) alan dinleyici. */
-  onEvent?: (message: TransportMessage) => void
-  /** Ölçüm/hata ayıklama için. */
+  onEvent?: (message: TransportMessage) => void  /** Ölçüm/hata ayıklama için. */
   log?: (level: 'warn' | 'info', message: string) => void
 }
 
 interface Pending {
   resolve: (message: TransportMessage) => void
   reject: (error: Error) => void
-  timer: NodeJS.Timeout
+  timer?: NodeJS.Timeout
 }
 
 export class RpcEndpoint {
   private pending = new Map<string, Pending>()
   private counter = 0
   private closed = false
+  /** Gelen olayları işleyen dinleyici (değiştirilebilir). */
+  eventHandler: ((message: TransportMessage) => void) | undefined
   private readonly options: RpcEndpointOptions
 
   constructor(options: RpcEndpointOptions) {
     this.options = options
+    this.eventHandler = options.onEvent
   }
 
   /** Gelen NDJSON satırını işler. Taşıyıcı her satırı buraya verir. */
@@ -65,14 +67,14 @@ export class RpcEndpoint {
         // Geç gelen veya iptal edilmiş istek; sessizce at.
         return
       }
-      clearTimeout(waiter.timer)
+      if (waiter.timer) clearTimeout(waiter.timer)
       this.pending.delete(message.id)
       waiter.resolve(message)
       return
     }
 
     if (message.kind === 'event') {
-      this.options.onEvent?.(message)
+      this.eventHandler?.(message)
       return
     }
 
@@ -82,7 +84,7 @@ export class RpcEndpoint {
     }
 
     // cancel/ping/pong: çağıran katman kendi anlamını yükler.
-    this.options.onEvent?.(message)
+    this.eventHandler?.(message)
   }
 
   private async runHandler(message: TransportMessage): Promise<void> {
@@ -124,6 +126,7 @@ export class RpcEndpoint {
   /**
    * İstek gönderir ve yanıtı bekler.
    * `error` türü yanıt da sözü çözer; çağıran `kind` kontrolü yapar.
+   * `timeoutMs <= 0` süresiz bekler (uzun süren ajan koşuları için).
    */
   async request(
     method: string,
@@ -136,19 +139,27 @@ export class RpcEndpoint {
     const id = `rpc-${Date.now().toString(36)}-${this.counter}`
     const message = createMessage('request', id, { method, payload })
     const effectiveTimeout = timeoutMs ?? this.options.defaultTimeoutMs ?? 30_000
+    const unbounded = effectiveTimeout <= 0
 
     return new Promise<TransportMessage>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error(`İstek zaman aşımı: ${method}`))
-      }, effectiveTimeout)
+      let timer: NodeJS.Timeout | null = null
+      if (!unbounded) {
+        timer = setTimeout(() => {
+          this.pending.delete(id)
+          reject(new Error(`İstek zaman aşımı: ${method}`))
+        }, effectiveTimeout)
+      }
 
-      this.pending.set(id, { resolve, reject, timer })
+      this.pending.set(id, {
+        resolve,
+        reject,
+        timer: timer ?? undefined
+      })
 
       try {
         this.options.send(encodeMessage(message))
       } catch (error) {
-        clearTimeout(timer)
+        if (timer) clearTimeout(timer)
         this.pending.delete(id)
         reject(error instanceof Error ? error : new Error(String(error)))
       }
@@ -165,7 +176,7 @@ export class RpcEndpoint {
     if (this.closed) return
     this.closed = true
     for (const [id, waiter] of this.pending) {
-      clearTimeout(waiter.timer)
+      if (waiter.timer) clearTimeout(waiter.timer)
       this.pending.delete(id)
       waiter.reject(new Error(reason))
     }

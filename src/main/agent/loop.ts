@@ -31,6 +31,7 @@ import {
 import { randomUUID } from 'crypto'
 import type {
   AgentApprovalRequest,
+  AppSettings,
   ChatEvent,
   ChatMessage,
   ChatRequest
@@ -46,6 +47,16 @@ interface AgentRunOptions {
   sink: AgentEventSink
   approval?: (request: AgentApprovalRequest) => Promise<boolean>
   workspaceRoot?: string | null
+  /**
+   * Ayar enjeksiyonu. Verilmezse yerel ayar dosyasından okunur.
+   * Ayrı süreçte (utilityProcess) app nesnesi olmadığı için ana süreç geçirir.
+   */
+  settings?: AppSettings
+  /**
+   * Electron'a bağlı yetenekleri atla (beceri, MCP, eklenti).
+   * Ayrı süreçte bu kaynaklar ana süreçte yaşar.
+   */
+  hostlessCapabilities?: boolean
 }
 
 const MAX_STEPS = 20
@@ -81,10 +92,11 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   const send = (event: ChatEvent): void => sink.emit(event)
   const mode = payload.agent?.mode ?? 'confirm'
   const profile = payload.agent?.profile ?? 'build'
-  const skills = await loadEnabledSkills()
-  const mcpTools = await getAgentMcpTools()
-  const pluginTools = await getAgentPluginTools()
-  const settings = await getSettings()
+  const hostless = options.hostlessCapabilities === true
+  const skills = hostless ? [] : await loadEnabledSkills()
+  const mcpTools = hostless ? [] : await getAgentMcpTools()
+  const pluginTools = hostless ? [] : await getAgentPluginTools()
+  const settings = options.settings ?? (await getSettings())
   const workspaceRoot =
     options.workspaceRoot !== undefined
       ? options.workspaceRoot
@@ -225,6 +237,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       ? { root: workspaceRoot, sessionId: payload.sessionId }
       : undefined,
     readOnly: profile === 'plan',
+    formatOnEdit: settings.hooks?.formatOnEdit === true,
     subagentTasks
   })
 

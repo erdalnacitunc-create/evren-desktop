@@ -1,4 +1,4 @@
-import { utilityProcess, type UtilityProcess } from 'electron'
+import { utilityProcess, app, type UtilityProcess } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { createLogger } from '../logger'
@@ -6,6 +6,8 @@ import { RpcEndpoint } from '../transport/rpc'
 import { createSessionHandler } from '../transport/remoteSessionRepository'
 import { createMessage, type TransportMessage } from '../transport/protocol'
 import { sessions } from '../sessionRepository'
+import type { AgentEventSink } from './eventSink'
+import type { AppSettings, ChatEvent, ChatRequest } from '../../shared/types'
 
 /**
  * Ajan süreci gözetmeni.
@@ -25,6 +27,8 @@ export interface AgentProcessOptions {
   modulePath?: string
   startTimeoutMs?: number
   inheritStdio?: boolean
+  /** İşçinin kullanacağı ortak kullanıcı verisi klasörü (yedekler, ayarlar). */
+  userDataPath?: string
 }
 
 export interface AgentProcessStatus {
@@ -44,6 +48,8 @@ export class AgentProcess {
   private lastError: string | undefined
   private ready = false
   private starting: Promise<void> | null = null
+  /** İstek kimliği → olay sink'i (eşzamanlı koşular için). */
+  private sinks = new Map<string, AgentEventSink>()
   private readonly options: AgentProcessOptions
 
   constructor(options: AgentProcessOptions = {}) {
@@ -71,7 +77,13 @@ export class AgentProcess {
       try {
         child = utilityProcess.fork(modulePath, [], {
           serviceName: 'EVREN Agent',
-          stdio: this.options.inheritStdio ? 'inherit' : 'ignore'
+          stdio: this.options.inheritStdio ? 'inherit' : 'ignore',
+          env: {
+            ...process.env,
+            // Ayrı süreçte `app` yok; ortak klasörleri ortamla paylaş.
+            EVREN_USER_DATA: this.options.userDataPath ?? safeUserDataPath(),
+            ...(safeTempPath() ? { EVREN_TEMP_DIR: safeTempPath() } : {})
+          }
         })
       } catch (error) {
         clearTimeout(timer)
@@ -167,6 +179,63 @@ export class AgentProcess {
     return message.payload as { ok: boolean; sessions: number }
   }
 
+  /**
+   * Ajanı işçide çalıştırır.
+   *
+   * `agent.run` isteği ajan bitene kadar bekler; olaylar ayrı `event`
+   * mesajlarıyla `sink`e akar. Böylece ana süreç renderer'a aynı sözleşmeyle
+   * yazmaya devam eder.
+   */
+  async runAgentInWorker(input: {
+    requestId: string
+    baseUrl: string
+    apiKey: string
+    payload: ChatRequest
+    settings: AppSettings
+    workspaceRoot: string | null
+  }, sink: AgentEventSink): Promise<{ ok: boolean; error?: string }> {
+    if (!this.child) await this.start()
+    if (!this.rpc) throw new Error('Ajan süreci başlatılamadı')
+
+    const rpc = this.rpc
+    // Eşzamanlı koşularda tek bir `eventHandler` yarışırdı; istek başına
+    // kayıt tutulur ve olaylar yalnızca kendi sink'ine gider.
+    if (rpc.eventHandler !== this.dispatchEvent) {
+      rpc.eventHandler = this.dispatchEvent
+    }
+    this.sinks.set(input.requestId, sink)
+
+    try {
+      const message = await rpc.request('agent.run', input, 0)
+      if (message.kind === 'error') {
+        const payload = (message.payload ?? {}) as { message?: string }
+        return { ok: false, error: payload.message ?? 'Ajan hatası' }
+      }
+      return (message.payload ?? { ok: true }) as { ok: boolean; error?: string }
+    } finally {
+      this.sinks.delete(input.requestId)
+    }
+  }
+
+  /** Gelen olayı istek kimliğine göre doğru sink'e yönlendirir. */
+  private dispatchEvent = (message: TransportMessage): void => {
+    const sink = this.sinks.get(message.id)
+    if (!sink) return
+    try {
+      sink.emit(message.payload as ChatEvent)
+    } catch (error) {
+      log.warn(`Olay sink'e iletilemedi (${message.id}):`, error)
+    }
+  }
+
+  /** Çalışan bir ajan isteğini iptal eder. */
+  async cancelInWorker(requestId: string): Promise<boolean> {
+    if (!this.rpc) return false
+    const message = await this.request('agent.cancel', { requestId }, 5_000)
+    if (message.kind === 'error') return false
+    return (message.payload as { ok?: boolean })?.ok === true
+  }
+
   /** ping → pong turu; süreç canlı mı? */
   async ping(timeoutMs = 5_000): Promise<{ pid?: number; uptimeMs?: number; protocol?: number }> {
     const message = await this.request('ping', {}, timeoutMs)
@@ -227,6 +296,23 @@ export class AgentProcess {
 /** `out/main/agentWorker.js` — ana süreç paketiyle aynı klasörde. */
 function defaultWorkerPath(): string {
   return join(__dirname, 'agentWorker.js')
+}
+
+/** `app` mevcut değilse (test) sessizce boş döner. */
+function safeUserDataPath(): string | undefined {
+  try {
+    return app?.getPath?.('userData')
+  } catch {
+    return undefined
+  }
+}
+
+function safeTempPath(): string | undefined {
+  try {
+    return app?.getPath?.('temp')
+  } catch {
+    return undefined
+  }
 }
 
 let shared: AgentProcess | null = null

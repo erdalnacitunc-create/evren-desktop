@@ -4,7 +4,17 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        input: {
+          // Ana süreç girişi
+          index: resolve('src/main/index.ts'),
+          // Ayrı süreçte çalışan ajan işçisi (utilityProcess.fork hedefi)
+          agentWorker: resolve('src/main/agent/worker.ts')
+        }
+      }
+    }
   },
   preload: {
     plugins: [externalizeDepsPlugin()]

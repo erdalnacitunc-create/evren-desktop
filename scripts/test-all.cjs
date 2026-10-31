@@ -36,7 +36,8 @@ const SUITES = [
   { file: 'scripts/headless-auth-test.ts', label: 'Headless API kimlik doğrulama' },
   { file: 'scripts/session-repository-test.ts', label: 'Oturum deposu arayüzü' },
   { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' },
-  { file: 'scripts/agent-concurrency-test.ts', label: 'Eşzamanlı ajan koşuları' }
+  { file: 'scripts/agent-concurrency-test.ts', label: 'Eşzamanlı ajan koşuları' },
+  { file: 'scripts/agent-process-test.ts', label: 'Ajan süreci yaşam döngüsü', needsBuild: true }
 ]
 
 const args = process.argv.slice(2)
@@ -60,6 +61,24 @@ const missing = selected.filter((suite) => !existsSync(join(ROOT, suite.file)))
 if (missing.length > 0) {
   console.error(`Eksik test dosyası: ${missing.map((suite) => suite.file).join(', ')}`)
   process.exit(2)
+}
+
+// Bazı testler derlenmiş çıktıya ihtiyaç duyar (ör. ajan işçisi).
+// Yalnızca gerektiğinde ve yalnızca bir kez derle.
+const workerArtifact = join(ROOT, 'out', 'main', 'agentWorker.js')
+const needsBuild = selected.some((suite) => suite.needsBuild)
+if (needsBuild && !existsSync(workerArtifact)) {
+  process.stdout.write('\n\x1b[36m▶ Derleme gerekli (out/main/agentWorker.js yok)\x1b[0m\n')
+  const build = spawnSync('npm', ['run', 'build'], {
+    cwd: ROOT,
+    stdio: 'inherit',
+    shell: true,
+    env: process.env
+  })
+  if (build.status !== 0) {
+    console.error('Derleme başarısız; derleme gerektiren testler atlanamaz.')
+    process.exit(1)
+  }
 }
 
 let failedSuites = 0

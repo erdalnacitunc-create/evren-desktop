@@ -1,4 +1,5 @@
 import { buildBaseBody, toErrorEvent } from '../chatShared'
+import { createLogger } from '../logger'
 import { listModels } from '../api'
 import { loadApiKey } from '../credentials'
 import { loadEnabledSkills } from '../extensions'
@@ -62,8 +63,62 @@ interface AgentRunOptions {
   askQuestion?: (request: AgentQuestionRequest) => Promise<string[] | null>
 }
 
-const MAX_STEPS = 20
-const MAX_TOOL_CALLS = 40
+const log = createLogger('agent/loop')
+
+/**
+ * Adım/araç sınırları.
+ *
+ * Sınıra ulaşınca döngü sessizce bitmez: araçsız bir tur atılıp nihai yanıt
+ * istenir (bkz. finalizeRun). Sınırlar ortam değişkeniyle artırılabilir;
+ * varsayılanlar maliyet kontrolü için bilinçli olarak düşük tutulmuştur.
+ */
+function envLimit(name: string, fallback: number, max: number): number {
+  const raw = Number(process.env[name])
+  if (!Number.isFinite(raw) || raw <= 0) return fallback
+  return Math.min(Math.round(raw), max)
+}
+
+const MAX_STEPS = envLimit('EVREN_AGENT_MAX_STEPS', 20, 200)
+const MAX_TOOL_CALLS = envLimit('EVREN_AGENT_MAX_TOOL_CALLS', 40, 400)
+
+/**
+ * Adım/araç sınırına takılınca kullanıcıya gösterilecek özet.
+ * Model nihai yanıt üretemezse bile kullanıcı ne olduğunu görür.
+ */
+function summarizeRun(
+  reason: 'max-steps' | 'tool-limit',
+  tools: Array<{ name: string; ok: boolean }>
+): string {
+  const counts = new Map<string, { ok: number; fail: number }>()
+  for (const tool of tools) {
+    const entry = counts.get(tool.name) ?? { ok: 0, fail: 0 }
+    if (tool.ok) entry.ok += 1
+    else entry.fail += 1
+    counts.set(tool.name, entry)
+  }
+
+  const lines: string[] = [
+    reason === 'max-steps'
+      ? `Adım sınırına ulaştım (${MAX_STEPS} adım) ve yanıtı tamamlayamadım.`
+      : `Araç çağrısı sınırına ulaştım (${MAX_TOOL_CALLS}) ve yanıtı tamamlayamadım.`
+  ]
+
+  if (counts.size > 0) {
+    lines.push('', 'Bu sırada çalıştırdığım araçlar:')
+    for (const [name, entry] of counts) {
+      const fail = entry.fail > 0 ? `, ${entry.fail} hatalı` : ''
+      lines.push(`- ${name}: ${entry.ok} başarılı${fail}`)
+    }
+  } else {
+    lines.push('', 'Hiçbir araç çalıştırmadım.')
+  }
+
+  lines.push(
+    '',
+    'Devam etmek için "devam et" yazabilir veya görevi daha küçük parçalara bölebilirsiniz.'
+  )
+  return lines.join('\n')
+}
 
 function parseArguments(raw: string): Record<string, unknown> {
   try {
@@ -291,6 +346,11 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     })
   }
   let toolCallCount = 0
+  /**
+   * Yürütülen araçların özeti. Adım sınırına takılınca nihai yanıt
+   * üretilemezse kullanıcıya ne yapıldığını anlatmak için kullanılır.
+   */
+  const executedTools: Array<{ name: string; ok: boolean }> = []
 
   /**
    * Kullanıcı yanıt sürerken mesaj yazdıysa konuşmaya ekler.
@@ -310,12 +370,75 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     return true
   }
 
+  /**
+   * Adım veya araç sınırına takılınca çağrılır.
+   *
+   * Sessizce bitmek yerine modele **araçsız** son bir tur attırır: elindeki
+   * sonuçlarla nihai yanıtı yazar. Model yine boş dönerse çalıştırılan
+   * araçların özeti kullanıcıya gösterilir. Kullanıcı hiçbir durumda
+   * "yanıt yok" ile baş başa kalmaz.
+   */
+  const finalizeRun = async (reason: 'max-steps' | 'tool-limit'): Promise<void> => {
+    if (controller.signal.aborted) {
+      send({ requestId, type: 'done', finishReason: 'aborted' })
+      return
+    }
+
+    log.warn(
+      `Sınıra ulaşıldı: ${reason} (adım=${MAX_STEPS}, araç=${executedTools.length}) — nihai yanıt isteniyor`
+    )
+
+    const note =
+      reason === 'max-steps'
+        ? `Araç kullanma adımı sınırına ulaşıldı (${MAX_STEPS}). Bir daha araç çağırma. ` +
+          'Elindeki araç sonuçlarına dayanarak kullanıcının sorusuna nihai yanıtı yaz. ' +
+          'Eksik kalan nokta varsa kısaca belirt. Türkçe ve kısa yaz.'
+        : `Araç çağrısı sınırına ulaşıldı (${MAX_TOOL_CALLS}). Bir daha araç çağırma. ` +
+          'Elindeki sonuçlarla nihai yanıtı yaz. Eksik kalan nokta varsa kısaca belirt.'
+
+    try {
+      const body = {
+        ...buildBaseBody(payload),
+        messages: [...messages, { role: 'system' as const, content: note }],
+        // Araçsız tur: model yanıt yazmak zorunda kalır.
+        tools: [],
+        tool_choice: 'none' as const
+      }
+      const result = await streamCompletion(
+        baseUrl,
+        apiKey,
+        body,
+        controller.signal,
+        (delta) => send({ requestId, type: delta.kind, text: delta.text })
+      )
+      if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
+
+      if ((result.content ?? '').trim().length > 0) {
+        log.info(`Nihai yanıt üretildi (${reason}), ${result.content.length} karakter`)
+        send({ requestId, type: 'done', finishReason: reason })
+        return
+      }
+      log.warn(`Nihai yanıt boş döndü (${reason}); özet metni yazılıyor`)
+    } catch (error) {
+      if (controller.signal.aborted) {
+        send({ requestId, type: 'done', finishReason: 'aborted' })
+        return
+      }
+      log.warn(`Nihai yanıt isteği başarısız (${reason}):`, error)
+    }
+
+    // Son çare: araç kayıtlarından okunabilir özet.
+    send({ requestId, type: 'content', text: summarizeRun(reason, executedTools) })
+    send({ requestId, type: 'done', finishReason: reason })
+  }
+
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
       if (controller.signal.aborted) {
         send({ requestId, type: 'done', finishReason: 'aborted' })
         return
       }
+      log.debug(`adım ${step + 1}/${MAX_STEPS} başladı (araç: ${toolCallCount})`)
 
       if (step > 0) applySteering()
 
@@ -346,6 +469,9 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       )
 
       if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
+      log.debug(
+        `adım ${step + 1}: içerik=${(result.content ?? '').length} araç=${result.toolCalls.length} bitiş=${result.finishReason ?? '-'}`
+      )
 
       if (result.toolCalls.length === 0) {
         // Araç çağrısı yok ama kullanıcı araya girdiyse yanıtı bitirme, devam et.
@@ -370,7 +496,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           return
         }
         if (toolCallCount >= MAX_TOOL_CALLS) {
-          send({ requestId, type: 'done', finishReason: 'tool-limit' })
+          await finalizeRun('tool-limit')
           return
         }
         toolCallCount += 1
@@ -386,6 +512,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             result: { toolCallId: call.id, name: call.name, ok: false, content }
           })
           messages.push({ role: 'tool', tool_call_id: call.id, content })
+          executedTools.push({ name: call.name, ok: false })
           continue
         }
 
@@ -467,6 +594,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             }
           })
           messages.push({ role: 'tool', tool_call_id: call.id, content: execution.content })
+          executedTools.push({ name: call.name, ok: execution.ok })
 
           if (execution.imageDataUrl) {
             messages.push({
@@ -489,7 +617,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       }
     }
 
-    send({ requestId, type: 'done', finishReason: 'max-steps' })
+    await finalizeRun('max-steps')
   } catch (error) {
     send(toErrorEvent(requestId, error, controller))
   } finally {

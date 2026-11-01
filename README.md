@@ -188,11 +188,11 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-## 0.3.1 Beta
+## 0.3.2 Beta
 
 ### Windows x64
-- Kurulum: `release/EVREN-Desktop-Setup-0.3.1-x64.exe`
-- Portable: `release/EVREN-Desktop-0.3.1-portable-x64.zip`
+- Kurulum: `release/EVREN-Desktop-Setup-0.3.2-x64.exe`
+- Portable: `release/EVREN-Desktop-0.3.2-portable-x64.zip`
 - Ayrı beta profili: `%APPDATA%\EVREN Desktop Beta`
 
 ### Pardus / Debian x64
@@ -201,27 +201,30 @@ npm run build:win  # Windows NSIS kurulum paketi
 
 ### Bu sürümde düzeltilenler
 
-**Geçici sunucu hatalarında otomatik devam**
-- 429, 500, 502, 503, 504 ve ağ kopmalarında istek otomatik yeniden denenir
-  (en fazla 4 deneme, üstel geri çekilme, `Retry-After` desteği)
-- Yanıtın bir kısmı aktıktan sonra kopan bağlantı **tekrar denenmez** —
-  metin çiftlenmez; hata açıkça bildirilir
-- Arayüzde `Model şu anda dolu (503) — yeniden deneniyor (1/4)` gösterilir ve
-  ilk parça geldiğinde kaybolur
-- 401/403/404/422 gibi kalıcı hatalar yeniden denenmez
+**Ajan sessizce susuyordu (asıl düzeltme)**
+- Adım (20) veya araç (40) sınırına ulaşınca döngü hiçbir metin üretmeden
+  bitiyordu; kullanıcı boş ekranla kalıyordu. Gerçek bir oturumda model
+  20 adım boyunca yalnızca düşünüp tek karakter yanıt yazmadı
+  (`finish=max-steps`, 0 karakter).
+- Artık sınıra ulaşınca modele **araçsız** son bir tur attırılır ve elindeki
+  sonuçlarla nihai yanıtı yazması istenir.
+- Model yine boş dönerse çalıştırılan araçların özeti gösterilir
+  ("Adım sınırına ulaştım… şu araçlar çalıştı… devam et yazabilirsiniz").
+- Kullanıcı hiçbir durumda "yanıt yok" ile baş başa kalmaz.
 
-**`run_command` kabuk sağlamlığı**
-- Windows'ta komutlar artık `-EncodedCommand` ile geçirilir; modelin ürettiği
-  tırnak yoğun, çok satırlı veya `$` değişkenli scriptler bozulmadan çalışır
-- Ajanın "kabuk yuttu, geçici dosyaya yazıp yeniden çalıştırıyorum" turu
-  büyük ölçüde ortadan kalkar
+**Tanılama**
+- Ajan döngüsü artık günlüğe yazıyor: her adımın numarası, içerik uzunluğu,
+  araç sayısı ve bitiş nedeni. Bir sonraki sorunda
+  `Ayarlar → Genel → Günlükler` gerçek kanıt verir.
+
+**Ayarlanabilir sınırlar**
+- `EVREN_AGENT_MAX_STEPS` (varsayılan 20, en fazla 200)
+- `EVREN_AGENT_MAX_TOOL_CALLS` (varsayılan 40, en fazla 400)
+- Uzun görevlerde artırmak için uygulamayı bu değişkenlerle başlatın.
 
 ### Notlar
-- Sekme değişiminde akışın durması bu sürümde **yeniden üretilemedi**: gerçek
-  arayüz üzerinden (yeni sohbet → gönder → başka sohbete geç → geri dön)
-  hem düz hem ajan modunda yanıt akmaya devam etti ve oturuma kaydedildi.
-  Yine de görürseniz günlük dosyası artık kanıt sağlar:
-  Ayarlar → Genel → Günlükler.
+- 0.3.1'deki otomatik yeniden deneme (429/5xx) ve `run_command`
+  `-EncodedCommand` düzeltmeleri bu sürümde de var.
 
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.

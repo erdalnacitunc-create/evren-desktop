@@ -1,5 +1,6 @@
 import { buildBaseBody, toErrorEvent } from './chatShared'
 import { streamCompletion } from './sse'
+import { streamWithContinuation } from './ai/continuation'
 import {
   createRequestSink,
   createSafeSink,
@@ -220,13 +221,27 @@ export async function runMultiverse(options: MultiverseRunOptions): Promise<void
       multiverse: undefined
     })
 
-    const result = await streamCompletion(
-      baseUrl,
-      apiKey,
-      body,
-      controller.signal,
-      (delta) => send({ requestId, type: delta.kind, text: delta.text })
-    )
+    const result = await streamWithContinuation({
+      messages: synthesisMessages,
+      signal: controller.signal,
+      onDelta: (kind, text) => send({ requestId, type: kind, text }),
+      run: (messagesToSend) =>
+        streamCompletion(
+          baseUrl,
+          apiKey,
+          { ...body, messages: messagesToSend },
+          controller.signal,
+          (delta) => send({ requestId, type: delta.kind, text: delta.text })
+        ),
+      onContinue: (event) =>
+        send({
+          requestId,
+          type: 'continue',
+          reason: event.reason,
+          attempt: event.attempt,
+          chars: event.soFar
+        })
+    })
 
     if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
 

@@ -1,13 +1,15 @@
 /// <reference types="node" />
 import { createServer } from 'http'
 import { streamCompletion } from '../src/main/sse'
+import { RetryPolicy } from '../src/main/retry'
 
 /**
- * Boşta kalan akış koruması.
+ * Üç katmanlı zaman aşımı — OpenCode `http.ts` parity.
  * Çalıştırma: node scripts/run-unit.cjs scripts/stream-idle-test.ts
  *
- * Gerçek olay: iki paralel sekmede sağlayıcı bağlantıyı açtı ama hiç veri
- * göndermedi; istek sonsuza kadar bekledi (ne yanıt ne hata).
+ *   headerTimeout : başlıklar gelene kadar
+ *   chunkTimeout  : iki parça arası
+ *   totalTimeout  : istek başından sonuna
  */
 
 let failed = 0
@@ -19,7 +21,7 @@ function check(label: string, actual: unknown, expected: unknown): void {
 
 const sse = (payload: unknown): string => `data: ${JSON.stringify(payload)}\n\n`
 
-type Mode = 'silent' | 'slow-ok' | 'headers-then-silent'
+type Mode = 'no-headers' | 'headers-then-silent' | 'slow-ok' | 'too-long-total'
 
 function startServer(mode: Mode) {
   let requests = 0
@@ -27,8 +29,8 @@ function startServer(mode: Mode) {
     request.resume()
     request.on('end', () => {
       requests += 1
-      if (mode === 'silent') {
-        // Bağlantıyı aç, hiçbir şey gönderme.
+      if (mode === 'no-headers') {
+        // Bağlantıyı kabul et, hiçbir şey yazma (başlık bile yok).
         return
       }
       if (mode === 'headers-then-silent') {
@@ -36,20 +38,28 @@ function startServer(mode: Mode) {
         response.flushHeaders()
         return
       }
-      // slow-ok: eşik altında kalan aralıklarla parça gönder.
+      if (mode === 'slow-ok') {
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        let index = 0
+        const timer = setInterval(() => {
+          if (index >= 4) {
+            response.write(sse({ choices: [{ delta: {}, finish_reason: 'stop' }] }))
+            response.write('data: [DONE]\n\n')
+            response.end()
+            clearInterval(timer)
+            return
+          }
+          response.write(sse({ choices: [{ delta: { content: `p${index} ` } }] }))
+          index += 1
+        }, 60)
+        return
+      }
+      // too-long-total: sürekli yavaş parça, hiç bitmez
       response.writeHead(200, { 'content-type': 'text/event-stream' })
-      let index = 0
       const timer = setInterval(() => {
-        if (index >= 4) {
-          response.write(sse({ choices: [{ delta: {}, finish_reason: 'stop' }] }))
-          response.write('data: [DONE]\n\n')
-          response.end()
-          clearInterval(timer)
-          return
-        }
-        response.write(sse({ choices: [{ delta: { content: `p${index} ` } }] }))
-        index += 1
-      }, 150)
+        response.write(sse({ choices: [{ delta: { content: 'x' } }] }))
+      }, 80)
+      response.on('close', () => clearInterval(timer))
     })
   })
   return new Promise<{ server: typeof server; port: number; count: () => number }>((resolve) => {
@@ -64,7 +74,7 @@ function startServer(mode: Mode) {
   })
 }
 
-const run = (port: number, idleMs: number, retries: number[] = [], onRetry?: (info: { attempt: number; maxAttempts: number; reason: string }) => void) =>
+const run = (port: number, timeouts: { headerMs?: number; chunkMs?: number; totalMs?: number } = {}) =>
   streamCompletion(
     `http://127.0.0.1:${port}`,
     'test',
@@ -72,76 +82,90 @@ const run = (port: number, idleMs: number, retries: number[] = [], onRetry?: (in
     new AbortController().signal,
     () => undefined,
     {
-      onRetry:
-        onRetry ??
-        ((info) => {
-          retries.push(info.attempt)
-        }),
-      policy: { maxAttempts: 4, baseDelayMs: 20, maxDelayMs: 50, factor: 1 }
+      headerTimeoutMs: timeouts.headerMs ?? 400,
+      chunkTimeoutMs: timeouts.chunkMs ?? 400,
+      totalTimeoutMs: timeouts.totalMs ?? false,
+      policy: new RetryPolicy({ maxRetries: 1, random: () => 0.5 })
     }
   )
 
 void (async () => {
-  process.env['EVREN_STREAM_IDLE_MS'] = '400'
-
-  // ===== 1) hiç veri gelmiyor: zaman aşımı + sınırlı deneme =====
+  // ===== 1) başlık gelmiyor → headerTimeout =====
   {
-    const { server, port, count } = await startServer('silent')
-    const retries: number[] = []
+    const { server, port, count } = await startServer('no-headers')
     const started = Date.now()
-    let message = ''
+    let tag = ''
     try {
-      await run(port, 400, retries)
+      await run(port, { headerMs: 400 })
     } catch (error) {
-      message = error instanceof Error ? error.message : String(error)
+      tag = (error as { reason?: { tag?: string } })?.reason?.tag ?? 'unknown'
     }
     const elapsed = Date.now() - started
     server.close()
 
-    check('hata fırlatıldı (sonsuza kadar beklemez)', message.length > 0, true)
-    check('hata mesajı boşta kalmayı açıklar', message.includes('veri göndermedi') || message.includes('durdu'), true)
-    check('en fazla 2 deneme', count(), 2)
-    check('tek yeniden deneme bildirildi', retries.length, 1)
-    check('toplam süre sınırlı', elapsed < 5000, true)
+    check('başlık zaman aşımı yakalandı', tag, 'Timeout')
+    check('sonsuza kadar beklemedi', elapsed < 8_000, true)
+    check('tek deneme (Timeout denenmez)', count(), 1)
   }
 
-  // ===== 2) başlıklar geliyor, gövde gelmiyor =====
+  // ===== 2) başlık var, gövde yok → chunkTimeout =====
   {
-    const { server, port, count } = await startServer('headers-then-silent')
-    let message = ''
+    const { server, port } = await startServer('headers-then-silent')
+    const started = Date.now()
+    let tag = ''
     try {
-      await run(port, 400)
+      await run(port, { chunkMs: 400 })
     } catch (error) {
-      message = error instanceof Error ? error.message : String(error)
+      tag = (error as { reason?: { tag?: string } })?.reason?.tag ?? 'unknown'
     }
+    const elapsed = Date.now() - started
     server.close()
 
-    check('başlık sonrası sessizlik yakalanır', message.length > 0, true)
-    check('gövde sessizliğinde de deneme sınırı', count(), 2)
+    check('parça zaman aşımı yakalandı', tag, 'Transport')
+    check('gövde sessizliği sınırlı sürede', elapsed < 8_000, true)
   }
 
-  // ===== 3) yavaş ama düzenli akış tamamlanır =====
+  // ===== 3) yavaş ama düzenli akış etkilenmez =====
   {
     const { server, port } = await startServer('slow-ok')
-    const retries: number[] = []
+    const started = Date.now()
     let content = ''
     let error = ''
     try {
-      const result = await run(port, 400, retries)
+      const result = await run(port, { chunkMs: 2_000, headerMs: 2_000 })
       content = result.content
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught)
     }
+    const elapsed = Date.now() - started
     server.close()
 
     check('yavaş akış hata vermez', error, '')
     check('yavaş akış tamamlanır', content, 'p0 p1 p2 p3 ')
-    check('gereksiz deneme yok', retries.length, 0)
+    check('parça süresi sayaç sıfırlar', elapsed >= 200, true)
   }
 
-  // ===== 4) iptal hâlâ çalışıyor =====
+  // ===== 4) toplam süre aşılırsa kesilir =====
   {
-    const { server, port } = await startServer('silent')
+    const { server, port } = await startServer('too-long-total')
+    const started = Date.now()
+    let tag = ''
+    try {
+      await run(port, { chunkMs: 5_000, headerMs: 5_000, totalMs: 500 })
+    } catch (error) {
+      tag = (error as { reason?: { tag?: string } })?.reason?.tag ?? 'unknown'
+    }
+    const elapsed = Date.now() - started
+    server.close()
+    server.closeAllConnections?.()
+
+    check('toplam süre aşımı yakalandı', tag, 'Timeout')
+    check('toplam süre sınırı uygulandı', elapsed < 6_000, true)
+  }
+
+  // ===== 5) kullanıcı iptali =====
+  {
+    const { server, port } = await startServer('headers-then-silent')
     const controller = new AbortController()
     const promise = streamCompletion(
       `http://127.0.0.1:${port}`,
@@ -149,7 +173,7 @@ void (async () => {
       { model: 'x', messages: [{ role: 'user', content: 'x' }] },
       controller.signal,
       () => undefined,
-      { policy: { maxAttempts: 2, baseDelayMs: 20, maxDelayMs: 50, factor: 1 } }
+      { headerTimeoutMs: 30_000, chunkTimeoutMs: 30_000 }
     )
     setTimeout(() => controller.abort(), 100)
     let aborted = false
@@ -159,9 +183,10 @@ void (async () => {
       aborted = (error as { name?: string }).name === 'AbortError' || controller.signal.aborted
     }
     server.close()
+
     check('kullanıcı iptali çalışır', aborted, true)
   }
 
-  console.log(`TOTAL=13 FAILED=${failed}`)
+  console.log(`TOTAL=11 FAILED=${failed}`)
   process.exit(failed === 0 ? 0 : 1)
 })()

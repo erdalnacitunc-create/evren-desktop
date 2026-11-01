@@ -42,6 +42,7 @@ const SUITES = [
   { file: 'scripts/session-repository-test.ts', label: 'Oturum deposu arayüzü' },
   { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' },
   { file: 'scripts/max-steps-test.ts', label: 'Adım sınırı davranışı' },
+  { file: 'scripts/continuation-test.ts', label: 'Kesilen yanıtı sürdürme' },
   { file: 'scripts/agent-concurrency-test.ts', label: 'Eşzamanlı ajan koşuları' },
   { file: 'scripts/agent-process-test.ts', label: 'Ajan süreci yaşam döngüsü', needsBuild: true },
   { file: 'scripts/remote-session-test.ts', label: 'Uzak oturum deposu', needsBuild: true },

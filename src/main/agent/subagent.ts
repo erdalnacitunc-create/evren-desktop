@@ -1,6 +1,7 @@
 import { buildBaseBody } from '../chatShared'
 import { loadEnabledSkills } from '../extensions'
 import { streamCompletion } from '../sse'
+import { streamWithContinuation } from '../ai/continuation'
 import { resolvePermission, permissionResource, toolCategory } from '../../shared/permissions'
 import type {
   AgentApprovalRequest,
@@ -105,13 +106,19 @@ export async function runSubagent(options: SubagentOptions): Promise<{
         tools: registry.definitions(),
         tool_choice: 'auto'
       }
-      const result = await streamCompletion(
-        baseUrl,
-        apiKey,
-        body,
-        controller.signal,
-        () => undefined
-      )
+      const result = await streamWithContinuation({
+        messages: body.messages as ChatMessage[],
+        signal: controller.signal,
+        onDelta: () => undefined,
+        run: (messagesToSend) =>
+          streamCompletion(
+            baseUrl,
+            apiKey,
+            { ...body, messages: messagesToSend },
+            controller.signal,
+            () => undefined
+          )
+      })
       if (result.content) finalContent = result.content
 
       if (result.toolCalls.length === 0) {

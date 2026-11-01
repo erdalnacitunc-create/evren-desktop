@@ -965,7 +965,11 @@ export function Chat({
       if (event.type === 'content') {
         draftRef.current = { ...draftRef.current, content: draftRef.current.content + event.text }
         setDraft({ ...draftRef.current })
-        setNotice((current) => (current && current.includes('yeniden deneniyor') ? null : current))
+        setNotice((current) =>
+          current && (current.includes('yeniden deneniyor') || current.includes('sürdürülüyor'))
+            ? null
+            : current
+        )
       } else if (event.type === 'reasoning') {
         draftRef.current = {
           ...draftRef.current,
@@ -976,6 +980,16 @@ export function Chat({
         // Geçici hata: otomatik yeniden deneme sürüyor, kullanıcıya bildir.
         setNotice(
           `${event.reason} — yeniden deneniyor (${event.attempt}/${event.maxAttempts})`
+        )
+        setStreaming(true)
+        setError(null)
+      } else if (event.type === 'continue') {
+        // OpenCode davranışı: kesilen ya da token limitine takılan yanıt
+        // kaldığı yerden sürdürülür; metin korunur.
+        setNotice(
+          event.reason === 'output-limit'
+            ? `Çıktı sınırına ulaşıldı — yanıt sürdürülüyor (${event.attempt})`
+            : `Yanıt kesildi — kaldığı yerden sürdürülüyor (${event.attempt})`
         )
         setStreaming(true)
         setError(null)

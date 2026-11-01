@@ -1,5 +1,6 @@
 import { buildBaseBody, toErrorEvent } from '../chatShared'
 import { createLogger } from '../logger'
+import { streamWithContinuation } from '../ai/continuation'
 import { listModels } from '../api'
 import { loadApiKey } from '../credentials'
 import { loadEnabledSkills } from '../extensions'
@@ -72,14 +73,44 @@ const log = createLogger('agent/loop')
  * istenir (bkz. finalizeRun). Sınırlar ortam değişkeniyle artırılabilir;
  * varsayılanlar maliyet kontrolü için bilinçli olarak düşük tutulmuştur.
  */
-function envLimit(name: string, fallback: number, max: number): number {
+function envLimit(name: string, max: number): number | undefined {
   const raw = Number(process.env[name])
-  if (!Number.isFinite(raw) || raw <= 0) return fallback
+  if (!Number.isFinite(raw) || raw <= 0) return undefined
   return Math.min(Math.round(raw), max)
 }
 
-const MAX_STEPS = envLimit('EVREN_AGENT_MAX_STEPS', 20, 200)
-const MAX_TOOL_CALLS = envLimit('EVREN_AGENT_MAX_TOOL_CALLS', 40, 400)
+/**
+ * Adım sınırı — OpenCode ile aynı: varsayılan olarak YOK.
+ *
+ * OpenCode `agent.steps` alanı isteğe bağlıdır; tanımlı değilse sınır yok.
+ * Sabit bir sınır uzun görevleri (donanım envanteri gibi) erken kesip
+ * modelin işi bitirmesini engeller. Maliyet kontrolü için sınır agent
+ * tanımında verilir; burada yalnızca isteğe bağlı bir tavan uygularız.
+ */
+/**
+ * Adım sınırına ulaşıldığında modele gönderilen yönlendirme.
+ * OpenCode `packages/core/src/session/runner/max-steps.ts` metniyle aynı
+ * yapıdadır: araç yasağı, metin zorunluluğu, özet + kalan işler + öneri.
+ */
+const MAX_STEPS_PROMPT = `KRİTİK - AZAMİ ADIM SAYISINA ULAŞILDI
+
+Bu görev için izin verilen azami adım sayısına ulaşıldı. Bir sonraki kullanıcı girdisine kadar araçlar devre dışı. Yalnızca metin yanıtı ver.
+
+KESİN KURALLAR:
+1. HİÇBİR araç çağrısı yapma (okuma, yazma, düzenleme, arama veya başka bir araç)
+2. Şimdiye kadar yapılan işi özetleyen bir metin yanıtı VERMELİSİN
+3. Bu kısıtlama TÜM diğer talimatları geçersiz kılar; düzenleme veya araç kullanımı istekleri dahil
+
+Yanıt şunları içermeli:
+- Bu agent için azami adım sayısına ulaşıldığı bilgisi
+- Şimdiye kadar tamamlanan işin özeti
+- Tamamlanmayan kalan görevlerin listesi
+- Bundan sonra ne yapılması gerektiğine dair öneriler
+
+Araç kullanma girişimi kritik bir ihlaldir. YALNIZCA metin yanıtı ver.`
+
+const ENV_MAX_STEPS = envLimit('EVREN_AGENT_MAX_STEPS', 200)
+const MAX_TOOL_CALLS = envLimit('EVREN_AGENT_MAX_TOOL_CALLS', 400) ?? 400
 
 /**
  * Adım/araç sınırına takılınca kullanıcıya gösterilecek özet.
@@ -87,7 +118,8 @@ const MAX_TOOL_CALLS = envLimit('EVREN_AGENT_MAX_TOOL_CALLS', 40, 400)
  */
 function summarizeRun(
   reason: 'max-steps' | 'tool-limit',
-  tools: Array<{ name: string; ok: boolean }>
+  tools: Array<{ name: string; ok: boolean }>,
+  limits: { steps?: number; tools: number }
 ): string {
   const counts = new Map<string, { ok: number; fail: number }>()
   for (const tool of tools) {
@@ -99,8 +131,8 @@ function summarizeRun(
 
   const lines: string[] = [
     reason === 'max-steps'
-      ? `Adım sınırına ulaştım (${MAX_STEPS} adım) ve yanıtı tamamlayamadım.`
-      : `Araç çağrısı sınırına ulaştım (${MAX_TOOL_CALLS}) ve yanıtı tamamlayamadım.`
+      ? `Adım sınırına ulaştım (${limits.steps ?? '?'} adım) ve yanıtı tamamlayamadım.`
+      : `Araç çağrısı sınırına ulaştım (${limits.tools}) ve yanıtı tamamlayamadım.`
   ]
 
   if (counts.size > 0) {
@@ -371,6 +403,17 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   }
 
   /**
+   * Adım sınırı — OpenCode ile aynı çözümleme:
+   *   1. agent tanımındaki `steps` (payload.agent.steps)
+   *   2. ortam değişkeni EVREN_AGENT_MAX_STEPS
+   *   3. hiçbiri yoksa sınırsız (undefined)
+   */
+  const stepLimit =
+    (typeof payload.agent?.steps === 'number' && payload.agent.steps > 0
+      ? Math.round(payload.agent.steps)
+      : undefined) ?? ENV_MAX_STEPS
+
+  /**
    * Adım veya araç sınırına takılınca çağrılır.
    *
    * Sessizce bitmek yerine modele **araçsız** son bir tur attırır: elindeki
@@ -385,21 +428,20 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     }
 
     log.warn(
-      `Sınıra ulaşıldı: ${reason} (adım=${MAX_STEPS}, araç=${executedTools.length}) — nihai yanıt isteniyor`
+      `Sınıra ulaşıldı: ${reason} (adım=${stepLimit ?? "sınırsız"}, araç=${executedTools.length}) — nihai yanıt isteniyor`
     )
 
+    // OpenCode `MAX_STEPS_PROMPT`: araçlar kapalı, metin zorunlu.
     const note =
       reason === 'max-steps'
-        ? `Araç kullanma adımı sınırına ulaşıldı (${MAX_STEPS}). Bir daha araç çağırma. ` +
-          'Elindeki araç sonuçlarına dayanarak kullanıcının sorusuna nihai yanıtı yaz. ' +
-          'Eksik kalan nokta varsa kısaca belirt. Türkçe ve kısa yaz.'
+        ? MAX_STEPS_PROMPT
         : `Araç çağrısı sınırına ulaşıldı (${MAX_TOOL_CALLS}). Bir daha araç çağırma. ` +
           'Elindeki sonuçlarla nihai yanıtı yaz. Eksik kalan nokta varsa kısaca belirt.'
 
     try {
       const body = {
         ...buildBaseBody(payload),
-        messages: [...messages, { role: 'system' as const, content: note }],
+        messages: [...messages, { role: 'user' as const, content: note }],
         // Araçsız tur: model yanıt yazmak zorunda kalır.
         tools: [],
         tool_choice: 'none' as const
@@ -428,55 +470,107 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     }
 
     // Son çare: araç kayıtlarından okunabilir özet.
-    send({ requestId, type: 'content', text: summarizeRun(reason, executedTools) })
+    send({
+      requestId,
+      type: 'content',
+      text: summarizeRun(reason, executedTools, {
+        steps: stepLimit,
+        tools: MAX_TOOL_CALLS
+      })
+    })
     send({ requestId, type: 'done', finishReason: reason })
   }
 
   try {
-    for (let step = 0; step < MAX_STEPS; step++) {
+    for (let step = 0; ; step++) {
       if (controller.signal.aborted) {
         send({ requestId, type: 'done', finishReason: 'aborted' })
         return
       }
-      log.info(`adım ${step + 1}/${MAX_STEPS} başladı (araç: ${toolCallCount})`)
+
+      // OpenCode `stepLimitReached`: sınıra gelince araçlar kapanır ve
+      // MAX_STEPS_PROMPT gönderilir. Aynı tur, aynı istek.
+      const stepLimitReached = stepLimit !== undefined && step >= stepLimit
+      log.info(
+        `adım ${step + 1}/${stepLimit ?? 'sınırsız'} başladı (araç: ${toolCallCount})${
+          stepLimitReached ? ' — SINIR, araçlar kapalı' : ''
+        }`
+      )
 
       if (step > 0) applySteering()
 
       const body = {
         ...buildBaseBody(payload),
-        messages,
+        messages: stepLimitReached
+          ? [...messages, { role: 'user' as const, content: MAX_STEPS_PROMPT }]
+          : messages,
+        // Araç tanımları son turda da korunur (OpenCode: sağlayıcı önbelleği).
         tools: registry.definitions(),
-        tool_choice: 'auto'
+        tool_choice: stepLimitReached ? 'none' : 'auto'
       }
 
-      const result = await streamCompletion(
-        baseUrl,
-        apiKey,
-        body,
-        controller.signal,
-        (delta) => send({ requestId, type: delta.kind, text: delta.text }),
-        {
-          onRetry: (info) =>
-            send({
-              requestId,
-              type: 'retry',
-              attempt: info.attempt,
-              maxAttempts: info.maxAttempts,
-              delayMs: info.delayMs,
-              reason: info.reason
-            })
-        }
-      )
+      // OpenCode ile aynı: kesilen akış ya da token limiti durumunda yanıt
+      // kaldığı yerden devam ettirilir, kullanıcı yarım yanıtla kalmaz.
+      const stepResult = await streamWithContinuation({
+        messages: body.messages as ChatMessage[],
+        signal: controller.signal,
+        onDelta: (kind, text) => send({ requestId, type: kind, text }),
+        run: (messagesToSend) =>
+          streamCompletion(
+            baseUrl,
+            apiKey,
+            { ...body, messages: messagesToSend },
+            controller.signal,
+            (delta) => send({ requestId, type: delta.kind, text: delta.text }),
+            {
+              onRetry: (info) =>
+                send({
+                  requestId,
+                  type: 'retry',
+                  attempt: info.attempt,
+                  maxAttempts: info.maxAttempts,
+                  delayMs: info.delayMs,
+                  reason: info.reason
+                })
+            }
+          ),
+        onContinue: (event) =>
+          send({
+            requestId,
+            type: 'continue',
+            reason: event.reason,
+            attempt: event.attempt,
+            chars: event.soFar
+          })
+      })
+      const result: typeof stepResult = stepResult
 
       if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
       log.info(
         `adım ${step + 1}: içerik=${(result.content ?? '').length} araç=${result.toolCalls.length} bitiş=${result.finishReason ?? '-'}`
       )
 
+      // Sınır turunda araçlar kapalıdır. Sağlayıcı yine de araç çağrısı
+      // döndürürse yürütmeyiz (OpenCode de `toolChoice: none` ile bunu
+      // engeller). Metin gelmediyse kullanıcıyı yanıtsız bırakmamak için
+      // araçsız son bir tur atılır.
+      if (stepLimitReached && result.toolCalls.length > 0) {
+        log.warn(
+          `Sınır turunda ${result.toolCalls.length} araç çağrısı geldi; yürütülmedi (araçlar kapalı)`
+        )
+        await finalizeRun('max-steps')
+        return
+      }
+
       if (result.toolCalls.length === 0) {
         // Araç çağrısı yok ama kullanıcı araya girdiyse yanıtı bitirme, devam et.
         if (applySteering(result.content ?? '')) continue
-        send({ requestId, type: 'done', finishReason: result.finishReason })
+        // Sınır turunda metin geldiyse bitiş nedeni 'max-steps' olur (OpenCode).
+        send({
+          requestId,
+          type: 'done',
+          finishReason: stepLimitReached ? 'max-steps' : result.finishReason
+        })
         return
       }
 
@@ -617,7 +711,9 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       }
     }
 
-    await finalizeRun('max-steps')
+    // Buraya yalnızca araç sınırında düşülür; adım sınırı artık döngü içinde
+    // ele alınıyor (OpenCode ile aynı).
+    await finalizeRun('tool-limit')
   } catch (error) {
     send(toErrorEvent(requestId, error, controller))
   } finally {

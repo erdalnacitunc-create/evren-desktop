@@ -337,6 +337,11 @@ export interface AgentOptions {
   browser: boolean
   computer: boolean
   workspace: boolean
+  /**
+   * Adım sınırı. OpenCode `agent.steps` ile aynı: verilmezse sınırsız.
+   * Maliyet kontrolü için agent tanımında belirtilir.
+   */
+  steps?: number
 }
 
 export interface ToolResultInfo {
@@ -422,6 +427,13 @@ export type ChatEvent =
       maxAttempts: number
       delayMs: number
       reason: string
+    }
+  | {
+      requestId: string
+      type: 'continue'
+      reason: 'interrupted' | 'output-limit'
+      attempt: number
+      chars: number
     }
   | { requestId: string; type: 'approval'; request: AgentApprovalRequest }
   | { requestId: string; type: 'question'; request: AgentQuestionRequest }

@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { createServer } from 'http'
 import { streamCompletion } from '../src/main/sse'
+import { RetryPolicy } from '../src/main/retry'
 
 /**
  * Gerçek 503 senaryosu: sunucu önce 503 döner, sonra başarılı olur.
@@ -73,7 +74,7 @@ const run = (
     { model: 'x', messages: [{ role: 'user', content: 'x' }] },
     new AbortController().signal,
     () => undefined,
-    { onRetry, policy: { maxAttempts: 4, baseDelayMs: 50, maxDelayMs, factor: 2 } }
+    { onRetry, policy: new RetryPolicy({ maxRetries: 3, random: () => 0.5 }) }
   )
 
 void (async () => {
@@ -87,7 +88,7 @@ void (async () => {
       check('iki hatadan sonra başarılı', result.content, 'TAM YANIT')
       check('iki yeniden deneme bildirildi', retries, [1, 2])
       check('sunucuya üç istek gitti', count(), 3)
-      check('toplam süre makul', Date.now() - started < 2000, true)
+      check('toplam süre politikaya uygun', Date.now() - started < 15_000, true)
     } catch (error) {
       check('503 sonrası başarı', `HATA: ${error instanceof Error ? error.message : error}`, 'TAM YANIT')
     }
@@ -101,7 +102,7 @@ void (async () => {
     try {
       const result = await run(port, (info) => delays.push(info.delayMs), 5000)
       check('Retry-After sonrası başarı', result.content, 'TAM YANIT')
-      check('Retry-After gecikmesi kullanıldı', delays[0], 1000)
+      check('Retry-After ile planın büyüğü kullanıldı', delays[0], 2000)
     } catch (error) {
       check('Retry-After senaryosu', String(error), 'TAM YANIT')
     }

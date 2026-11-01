@@ -188,44 +188,62 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-## 0.3.3 Beta
+## 0.4.0 Beta
 
 ### Windows x64
-- Kurulum: `release/EVREN-Desktop-Setup-0.3.3-x64.exe`
-- Portable: `release/EVREN-Desktop-0.3.3-portable-x64.zip`
+- Kurulum: `release/EVREN-Desktop-Setup-0.4.0-x64.exe`
+- Portable: `release/EVREN-Desktop-0.4.0-portable-x64.zip`
 - Ayrı beta profili: `%APPDATA%\EVREN Desktop Beta`
 
 ### Pardus / Debian x64
 - `.deb` ve AppImage: GitHub release asset
 - Ayrıntılar: `docs/PARDUS.md`
 
-### Bu sürümde düzeltilenler
+### Bu sürümde: OpenCode davranış eşliği
 
-**İstek sonsuza kadar bekleyebiliyordu (asıl düzeltme)**
-- `streamCompletion` içinde **hiç zaman aşımı yoktu**: sağlayıcı bağlantıyı
-  açıp hiç veri göndermezse istek ne yanıt ne hata üretmeden süresiz bekliyordu.
-  Gerçek kullanımda aynı sorgu iki sekmede paralel başlatıldı ve iki oturum da
-  yanıtsız kaldı (`sessions.json`: yalnızca kullanıcı mesajı, asistan kaydı yok).
-- Artık **boşta kalma koruması** var: 60 saniye boyunca tek bayt gelmezse istek
-  iptal edilir, yeniden denenir (en fazla 2 kez) ve ardından
-  "Sunucu yanıt vermedi" hatası gösterilir.
-- Yavaş ama düzenli akan yanıtlar etkilenmez; sayaç her parçada sıfırlanır.
-- Eşik ayarlanabilir: `EVREN_STREAM_IDLE_MS` (varsayılan 60000).
+Bu sürüm, çalışan bir referans uygulamanın (OpenCode 2.2.5) hata yönetimi,
+zaman aşımı ve yanıt sürdürme mimarisini birebir aktarır. Ayrıntı:
+`docs/OPENCODE-PARITY.md`.
 
-**Tanılama (kendi hatamın düzeltmesi)**
-- 0.3.2'de ajan adım loglarını `debug` seviyesinde yazmıştım; paketli sürümde
-  seviye `info` olduğu için günlükte **hiçbiri görünmüyordu**. Artık `info`.
-- Bir sonraki sorunda `Ayarlar → Genel → Günlükler` gerçek kanıt verir:
-  adım numarası, içerik uzunluğu, araç sayısı, bitiş nedeni, sınır olayları.
+**Zaman aşımı artık üç katmanlı**
+- Başlıklar için **5 dakika**, parçalar arası **15 dakika**, toplam süre sınırsız
+- Önceki 60 saniyelik eşik **kaldırıldı**: DeepSeek gibi sağlayıcılar akıl
+  yürütürken dakikalarca hiçbir bayt göndermeyebilir; 60 sn meşru yanıtları
+  kesiyordu
 
-**Paralel koşular**
-- İki eşzamanlı koşuda bekleyen istek artık diğerini etkilemeden hata ile
-  kapanır; olaylar ve içerik istek kimliğiyle ayrı kalır.
+**Hata sınıflandırma (11 sınıf)**
+- `RateLimit`, `ProviderInternal`, `Transport`, `InvalidProviderOutput`,
+  `UnknownProvider`, `Authentication`, `QuotaExceeded`, `ContentPolicy`,
+  `InvalidRequest`, `UnsupportedOperation`, `Timeout`
+- `x-should-retry` başlığı her şeyi ezer
+- Kota (429/402) throttle'dan ayırt edilir
 
-### Notlar
-- 0.3.1 (503 otomatik yeniden deneme, `run_command` sağlamlığı) ve
-  0.3.2 (adım sınırında nihai yanıt) düzeltmeleri bu sürümde de var.
-- Takılı kalan istekleri yeni sürüme geçmeden **Durdur** ile kapatabilirsiniz.
+**Retry zamanlaması**
+- 2 → 4 → 8 → 10 → 10 … saniye, **10 deneme**, jitter'lı (toplam ~84 s)
+- Zaman aşımına uğrayan deneme için ayrı kota: **3**
+- `Retry-After` 15 dakikaya kadar dikkate alınır
+
+**Kesilen yanıt artık sürdürülüyor (en önemli değişiklik)**
+- Akış ortada kesilirse metin korunur ve model **kaldığı yerden devam eder**
+- Token limitine takılırsa (`finish: length`) aynı şekilde sürdürülür
+- Arayüzde "Yanıt kesildi — kaldığı yerden sürdürülüyor" gösterilir
+- Düz sohbet, ajan, Çoklu Evren sentezi ve alt ajanlarda geçerli
+
+**Adım sınırı artık varsayılan değil**
+- OpenCode gibi: sınır yalnızca agent tanımında (`agent.steps`) verilirse uygulanır
+- Sınıra ulaşılınca `MAX_STEPS_PROMPT` gönderilir, araçlar kapanır ve model
+  yazılı özet verir; kullanıcı boş ekranla kalmaz
+
+### Doğrulama
+- 34 test paketi / **689 kontrol**
+- 3 katmanlı zaman aşımı, 66 sınıflandırma/politika kontrolü, kesilme →
+  sürdürme (20 kontrol), gerçek 503 dizisi, paralel bekleyen istek
+
+### Bilinen sınırlar
+- Retry durumu kalıcı mesaj alanı değil (OpenCode'da öyle); uygulama kapanınca
+  geçmişte kalmaz
+- Olay günlüğü (durable event log) henüz yok
+- Windows yayıncı imzası yok; SmartScreen uyarısı gösterebilir
 
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.

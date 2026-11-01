@@ -19,7 +19,9 @@ import type { ChatEvent, ChatRequest } from '../src/shared/types'
  */
 
 app.setPath('userData', process.env.EVREN_TEST_DATA as string)
-process.env['EVREN_STREAM_IDLE_MS'] = '500'
+// Testte üç katmanlı zaman aşımını kısalt (üretimde 5 dk / 15 dk).
+process.env['EVREN_STREAM_HEADER_TIMEOUT_MS'] = '500'
+process.env['EVREN_STREAM_CHUNK_TIMEOUT_MS'] = '500'
 
 let failed = 0
 function check(label: string, actual: unknown, expected: unknown): void {
@@ -127,7 +129,7 @@ app.whenReady().then(async () => {
   check('A olayları kendi kimliğinde', sinkA.events.every((e) => e.requestId === 'par-A'), true)
 
   // ===== bekletilen koşu =====
-  check('B sonsuza kadar beklemedi', elapsed < 15_000, true)
+  check('B sonsuza kadar beklemedi', elapsed < 40_000, true)
   check('B hata olayı üretti', sinkB.countOf('error'), 1)
   const errorEvent = sinkB.events.find((e) => e.type === 'error') as { error: string } | undefined
   check('B hata mesajı açıklayıcı', (errorEvent?.error ?? '').length > 0, true)

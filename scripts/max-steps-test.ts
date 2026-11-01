@@ -106,7 +106,9 @@ function payload(): ChatRequest {
       profile: 'build',
       browser: false,
       computer: false,
-      workspace: true
+      workspace: true,
+      // OpenCode gibi: sınır agent tanımında verilir, varsayılan yok.
+      steps: 20
     }
   } as ChatRequest
 }
@@ -147,7 +149,8 @@ app.whenReady().then(async () => {
     server.close()
 
     check('adım sınırında araçsız tur istendi', stats.sawEmptyTools, true)
-    check('20 araç turu + 1 final turu', stats.requests, 21)
+    // 20 araç turu + 1 sınır turu (araçlar kapalı) + 1 araçsız nihai tur
+    check('20 araç turu + sınır turu + nihai tur', stats.requests, 22)
     check('nihai yanıt akıtıldı', contentOf(sink.events), 'NİHAİ YANIT')
     check('tek done olayı', sink.countOf('done'), 1)
     check(

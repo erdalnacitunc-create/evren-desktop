@@ -20,7 +20,7 @@ import { sessions } from './sessionRepository'
 import { buildMemoryContext } from './memory/retrieve'
 import { streamCompletion } from './sse'
 import { buildBaseBody, toErrorEvent } from './chatShared'
-import type { AppSettings, ChatEvent, ChatRequest, ChatUsage } from '../shared/types'
+import type { AppSettings, ChatEvent, ChatMessage, ChatRequest, ChatUsage } from '../shared/types'
 import {
   applyStreamEvent,
   belongsToRequest,
@@ -30,6 +30,7 @@ import {
 import { asSink, type AgentEventSink } from './agent/eventSink'
 import { agentProcess } from './agent/process'
 import { createLogger } from './logger'
+import { streamWithContinuation } from './ai/continuation'
 
 const controllers = new Map<string, AbortController>()
 /**
@@ -362,25 +363,42 @@ export async function streamChat(
   controller: AbortController,
   send: (event: ChatEvent) => void
 ): Promise<void> {
+  const body = buildBaseBody(payload)
   try {
-    const result = await streamCompletion(
-      baseUrl,
-      apiKey,
-      buildBaseBody(payload),
-      controller.signal,
-      (delta) => send({ requestId, type: delta.kind, text: delta.text }),
-      {
-        onRetry: (info) =>
-          send({
-            requestId,
-            type: 'retry',
-            attempt: info.attempt,
-            maxAttempts: info.maxAttempts,
-            delayMs: info.delayMs,
-            reason: info.reason
-          })
-      }
-    )
+    // OpenCode ile aynı: kesilen akış veya token limiti durumunda yanıt
+    // kaldığı yerden devam ettirilir.
+    const result = await streamWithContinuation({
+      messages: (body.messages as ChatMessage[]) ?? [],
+      signal: controller.signal,
+      onDelta: (kind, text) => send({ requestId, type: kind, text }),
+      run: (messagesToSend) =>
+        streamCompletion(
+          baseUrl,
+          apiKey,
+          { ...body, messages: messagesToSend },
+          controller.signal,
+          (delta) => send({ requestId, type: delta.kind, text: delta.text }),
+          {
+            onRetry: (info) =>
+              send({
+                requestId,
+                type: 'retry',
+                attempt: info.attempt,
+                maxAttempts: info.maxAttempts,
+                delayMs: info.delayMs,
+                reason: info.reason
+              })
+          }
+        ),
+      onContinue: (event) =>
+        send({
+          requestId,
+          type: 'continue',
+          reason: event.reason,
+          attempt: event.attempt,
+          chars: event.soFar
+        })
+    })
     if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
     send({ requestId, type: 'done', finishReason: result.finishReason })
   } catch (error) {

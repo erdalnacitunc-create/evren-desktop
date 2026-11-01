@@ -28,6 +28,8 @@ const SUITES = [
   { file: 'scripts/lighthouse-test.ts', label: 'Lighthouse özetleme', fast: true },
   { file: 'scripts/retry-test.ts', label: 'Yeniden deneme politikası', fast: true },
   { file: 'scripts/retry-live-test.ts', label: 'Yeniden deneme (503 senaryosu)' },
+  { file: 'scripts/stream-idle-test.ts', label: 'Boşta kalan akış koruması' },
+  { file: 'scripts/parallel-hang-test.ts', label: 'Paralel koşuda bekleyen istek' },
   { file: 'scripts/shell-command-test.ts', label: 'Kabuk komut çalıştırma' },
   { file: 'scripts/stream-tracker-test.ts', label: 'Akış biriktirici', fast: true },
   { file: 'scripts/session-store-test.ts', label: 'Oturum deposu' },

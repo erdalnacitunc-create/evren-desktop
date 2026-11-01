@@ -188,11 +188,11 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-## 0.3.2 Beta
+## 0.3.3 Beta
 
 ### Windows x64
-- Kurulum: `release/EVREN-Desktop-Setup-0.3.2-x64.exe`
-- Portable: `release/EVREN-Desktop-0.3.2-portable-x64.zip`
+- Kurulum: `release/EVREN-Desktop-Setup-0.3.3-x64.exe`
+- Portable: `release/EVREN-Desktop-0.3.3-portable-x64.zip`
 - Ayrı beta profili: `%APPDATA%\EVREN Desktop Beta`
 
 ### Pardus / Debian x64
@@ -201,30 +201,31 @@ npm run build:win  # Windows NSIS kurulum paketi
 
 ### Bu sürümde düzeltilenler
 
-**Ajan sessizce susuyordu (asıl düzeltme)**
-- Adım (20) veya araç (40) sınırına ulaşınca döngü hiçbir metin üretmeden
-  bitiyordu; kullanıcı boş ekranla kalıyordu. Gerçek bir oturumda model
-  20 adım boyunca yalnızca düşünüp tek karakter yanıt yazmadı
-  (`finish=max-steps`, 0 karakter).
-- Artık sınıra ulaşınca modele **araçsız** son bir tur attırılır ve elindeki
-  sonuçlarla nihai yanıtı yazması istenir.
-- Model yine boş dönerse çalıştırılan araçların özeti gösterilir
-  ("Adım sınırına ulaştım… şu araçlar çalıştı… devam et yazabilirsiniz").
-- Kullanıcı hiçbir durumda "yanıt yok" ile baş başa kalmaz.
+**İstek sonsuza kadar bekleyebiliyordu (asıl düzeltme)**
+- `streamCompletion` içinde **hiç zaman aşımı yoktu**: sağlayıcı bağlantıyı
+  açıp hiç veri göndermezse istek ne yanıt ne hata üretmeden süresiz bekliyordu.
+  Gerçek kullanımda aynı sorgu iki sekmede paralel başlatıldı ve iki oturum da
+  yanıtsız kaldı (`sessions.json`: yalnızca kullanıcı mesajı, asistan kaydı yok).
+- Artık **boşta kalma koruması** var: 60 saniye boyunca tek bayt gelmezse istek
+  iptal edilir, yeniden denenir (en fazla 2 kez) ve ardından
+  "Sunucu yanıt vermedi" hatası gösterilir.
+- Yavaş ama düzenli akan yanıtlar etkilenmez; sayaç her parçada sıfırlanır.
+- Eşik ayarlanabilir: `EVREN_STREAM_IDLE_MS` (varsayılan 60000).
 
-**Tanılama**
-- Ajan döngüsü artık günlüğe yazıyor: her adımın numarası, içerik uzunluğu,
-  araç sayısı ve bitiş nedeni. Bir sonraki sorunda
-  `Ayarlar → Genel → Günlükler` gerçek kanıt verir.
+**Tanılama (kendi hatamın düzeltmesi)**
+- 0.3.2'de ajan adım loglarını `debug` seviyesinde yazmıştım; paketli sürümde
+  seviye `info` olduğu için günlükte **hiçbiri görünmüyordu**. Artık `info`.
+- Bir sonraki sorunda `Ayarlar → Genel → Günlükler` gerçek kanıt verir:
+  adım numarası, içerik uzunluğu, araç sayısı, bitiş nedeni, sınır olayları.
 
-**Ayarlanabilir sınırlar**
-- `EVREN_AGENT_MAX_STEPS` (varsayılan 20, en fazla 200)
-- `EVREN_AGENT_MAX_TOOL_CALLS` (varsayılan 40, en fazla 400)
-- Uzun görevlerde artırmak için uygulamayı bu değişkenlerle başlatın.
+**Paralel koşular**
+- İki eşzamanlı koşuda bekleyen istek artık diğerini etkilemeden hata ile
+  kapanır; olaylar ve içerik istek kimliğiyle ayrı kalır.
 
 ### Notlar
-- 0.3.1'deki otomatik yeniden deneme (429/5xx) ve `run_command`
-  `-EncodedCommand` düzeltmeleri bu sürümde de var.
+- 0.3.1 (503 otomatik yeniden deneme, `run_command` sağlamlığı) ve
+  0.3.2 (adım sınırında nihai yanıt) düzeltmeleri bu sürümde de var.
+- Takılı kalan istekleri yeni sürüme geçmeden **Durdur** ile kapatabilirsiniz.
 
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.

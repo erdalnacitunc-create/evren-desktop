@@ -438,7 +438,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         send({ requestId, type: 'done', finishReason: 'aborted' })
         return
       }
-      log.debug(`adım ${step + 1}/${MAX_STEPS} başladı (araç: ${toolCallCount})`)
+      log.info(`adım ${step + 1}/${MAX_STEPS} başladı (araç: ${toolCallCount})`)
 
       if (step > 0) applySteering()
 
@@ -469,7 +469,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       )
 
       if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
-      log.debug(
+      log.info(
         `adım ${step + 1}: içerik=${(result.content ?? '').length} araç=${result.toolCalls.length} bitiş=${result.finishReason ?? '-'}`
       )
 

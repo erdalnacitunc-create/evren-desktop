@@ -30,6 +30,21 @@ export interface CompletionOptions {
   policy?: RetryPolicy
 }
 
+/** Sağlayıcı veri göndermeyi durdurduğunda fırlatılır (yeniden denenebilir). */
+class StreamIdleError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'StreamIdleError'
+  }
+}
+
+/** Boşta kalma eşiği: EVREN_STREAM_IDLE_MS (varsayılan 60 sn). */
+function envIdleMs(): number {
+  const raw = Number(process.env['EVREN_STREAM_IDLE_MS'])
+  if (!Number.isFinite(raw) || raw < 0) return 60_000
+  return Math.min(Math.round(raw), 900_000)
+}
+
 class StreamHttpError extends Error {
   status?: number
   retryAfterMs: number | null
@@ -68,7 +83,12 @@ export async function streamCompletion(
       lastError = error instanceof Error ? error : new Error(String(error))
       const status = (error as { status?: number }).status
       const retryable = isRetryable({ status, aborted: signal.aborted })
-      const isLast = attempt + 1 >= policy.maxAttempts
+      // Boşta kalan akışta uzun uzun beklemeyelim: en fazla 2 deneme.
+      const attemptLimit =
+        lastError instanceof StreamIdleError
+          ? Math.min(policy.maxAttempts, 2)
+          : policy.maxAttempts
+      const isLast = attempt + 1 >= attemptLimit
       // Kısmi içerik aktıysa tekrar etmek metni çiftler; dur.
       const partial = (error as { partial?: boolean }).partial === true
       if (!retryable || isLast || partial) throw lastError
@@ -79,15 +99,66 @@ export async function streamCompletion(
       attempt += 1
       options.onRetry?.({
         attempt,
-        maxAttempts: policy.maxAttempts,
+        maxAttempts: attemptLimit,
         delayMs,
-        reason: describeStatus(status)
+        reason:
+          lastError instanceof StreamIdleError
+            ? 'Sunucu yanıt vermedi'
+            : describeStatus(status)
       })
       await sleep(delayMs, signal)
     }
   }
 
   throw lastError ?? new Error('İstek tamamlanamadı')
+}
+
+/**
+ * Boşta kalma koruması.
+ *
+ * Sağlayıcı bağlantıyı açıp hiç veri göndermezse istek sonsuza kadar
+ * bekleyebilir (gerçek kullanımda iki paralel sekmede tam olarak bu oldu).
+ * Her bayt geldiğinde sayaç sıfırlanır; süre dolarsa istek iptal edilir ve
+ * yeniden deneme politikası devreye girer.
+ */
+function createIdleGuard(
+  outer: AbortSignal,
+  idleMs: number
+): {
+  signal: AbortSignal
+  reset: () => void
+  dispose: () => void
+  idle: () => boolean
+} {
+  const controller = new AbortController()
+  let timer: NodeJS.Timeout | null = null
+  let fired = false
+
+  const onOuterAbort = (): void => controller.abort()
+
+  const reset = (): void => {
+    if (timer) clearTimeout(timer)
+    if (idleMs <= 0) return
+    timer = setTimeout(() => {
+      fired = true
+      controller.abort()
+    }, idleMs)
+  }
+
+  if (outer.aborted) controller.abort()
+  else outer.addEventListener('abort', onOuterAbort, { once: true })
+  reset()
+
+  return {
+    signal: controller.signal,
+    reset,
+    idle: () => fired,
+    dispose: () => {
+      if (timer) clearTimeout(timer)
+      timer = null
+      outer.removeEventListener('abort', onOuterAbort)
+    }
+  }
 }
 
 function parseRetryAfterHeader(value: string | null): number | null {
@@ -115,16 +186,30 @@ async function streamOnce(
 ): Promise<CompletionResult> {
   const url = `${baseUrl.replace(/\/+$/, '')}/v1/chat/completions`
 
-  const res = await fetch(url, {
-    method: 'POST',
-    signal,
+  const idleMs = envIdleMs()
+  const guard = createIdleGuard(signal, idleMs)
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      signal: guard.signal,
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       Accept: 'text/event-stream'
     },
-    body: JSON.stringify(body)
-  })
+      body: JSON.stringify(body)
+    })
+  } catch (error) {
+    guard.dispose()
+    if (guard.idle()) {
+      throw new StreamIdleError(
+        `Sunucu ${Math.round(idleMs / 1000)} saniye boyunca veri göndermedi`
+      )
+    }
+    throw error
+  }
 
   if (!res.ok) {
     let detail = ''
@@ -160,7 +245,19 @@ async function streamOnce(
 
   try {
   while (true) {
-    const { done, value } = await reader.read()
+    let read: { done: boolean; value?: Uint8Array }
+    try {
+      read = await reader.read()
+    } catch (error) {
+      if (guard.idle()) {
+        throw new StreamIdleError(
+          `Yanıt akışı ${Math.round(idleMs / 1000)} saniye boyunca durdu`
+        )
+      }
+      throw error
+    }
+    const { done, value } = read
+    guard.reset()
     if (done) break
 
     buffer += decoder.decode(value, { stream: true })
@@ -173,6 +270,7 @@ async function streamOnce(
       const data = trimmed.slice(5).trim()
       if (!data) continue
       if (data === '[DONE]') {
+        guard.dispose()
         return { content, reasoning, toolCalls: finalizeTools(toolAcc), usage, finishReason }
       }
 
@@ -222,6 +320,13 @@ async function streamOnce(
   }
 
   } catch (error) {
+    guard.dispose()
+    if (guard.idle() && !(error as { partial?: boolean }).partial) {
+      // Boşta kalan akış yeniden denenebilir.
+      throw new StreamIdleError(
+        `Yanıt akışı ${Math.round(idleMs / 1000)} saniye boyunca durdu`
+      )
+    }
     // Kısmi içerik aktıysa yeniden denemek metni çiftler; işaretle.
     if (content.length > 0 || reasoning.length > 0) {
       ;(error as { partial?: boolean }).partial = true
@@ -229,6 +334,7 @@ async function streamOnce(
     throw error
   }
 
+  guard.dispose()
   return { content, reasoning, toolCalls: finalizeTools(toolAcc), usage, finishReason }
 }
 

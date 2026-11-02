@@ -14,6 +14,7 @@ import type {
 } from '../../shared/types'
 import { approvalKey, waitForApproval } from './approval'
 import { createTools } from './tools'
+import { unknownToolMessage } from './toolSuggest'
 
 export type SubagentType = 'explore' | 'review' | 'general'
 
@@ -152,7 +153,7 @@ export async function runSubagent(options: SubagentOptions): Promise<{
 
         const tool = registry.get(call.name)
         if (!tool) {
-          const content = `Bilinmeyen araç: ${call.name}`
+          const content = unknownToolMessage(call.name, registry.names())
           send({
             requestId: parentRequestId,
             type: 'tool-result',

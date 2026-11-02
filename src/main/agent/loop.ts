@@ -20,6 +20,13 @@ import {
   type AgentEventSink
 } from './eventSink'
 import { createTools } from './tools'
+import { unknownToolMessage } from './toolSuggest'
+import {
+  progressNudgeMessage,
+  shouldNudgeProgress,
+  stalledStreak,
+  type StepObservation
+} from './progressGuard'
 import { runSubagent } from './subagent'
 import {
   cancelSubagentTask,
@@ -358,12 +365,21 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     '\n\nGörev takibi için todo_write aracını kullan. Kullanıcıya kısa bir özet ver; gereksiz uzun açıklamalardan kaçın.' +
     '\nKarmaşık araştırma/inceleme işlerini spawn_agent ile explore veya review alt ajanına devret; bağımsız çok adımlı işler için general kullan. ' +
     'Uzun sürecek veya paralel yürüyecek işlerde background=true kullan; sonucu task_wait/task_status ile al, task_list ile durumu gör.'
+  // Canlı koşuda gözlendi: model komutu `powershell -Command "… $_ …"` ile
+  // sarmaladı; dış katman `$_`'yi boşalttı ve komut düştü. Kaynağında kesmek
+  // için kural açıkça yazılır (sarmalayıcı ayrıca çözülüyor).
+  const shellSection =
+    '\n\nKOMUT ÇALIŞTIRMA (Windows): run_command komutları zaten PowerShell içinde çalışır. ' +
+    'Komutu `powershell -Command "..."` veya `pwsh -c "..."` ile SARMALAMA — çift ayrıştırma $ değişkenlerini bozar. ' +
+    'Betiği doğrudan yaz. Uzun/çok satırlı betikler için önce write_file ile .ps1 dosyası oluştur, sonra ' +
+    '`powershell -NoProfile -ExecutionPolicy Bypass -File betik.ps1` ile çalıştır. ' +
+    'Satır içi kullanımda $ değişkeni geçen betikleri tek tırnağa almayı düşün; emin değilsen dosyaya yaz.'
 
   const systemIndex = messages.findIndex((message) => message.role === 'system')
   if (systemIndex >= 0) {
     const existing = messages[systemIndex]
     if (typeof existing.content === 'string') {
-      existing.content += workspaceSection + planSection + todoSection + skillSection
+      existing.content += workspaceSection + planSection + todoSection + shellSection + skillSection
     }
   } else {
     messages.unshift({
@@ -375,6 +391,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         workspaceSection +
         planSection +
         todoSection +
+        shellSection +
         skillSection
     })
   }
@@ -508,6 +525,10 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   }
 
   try {
+    /** İlerlemesiz döngü koruması için adım gözlemleri. */
+    const stepHistory: StepObservation[] = []
+    let nudgesSent = 0
+
     for (let step = 0; ; step++) {
       if (controller.signal.aborted) {
         send({ requestId, type: 'done', finishReason: 'aborted' })
@@ -640,7 +661,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
 
         const tool = registry.get(call.name)
         if (!tool) {
-          const content = `Bilinmeyen araç: ${call.name}`
+          const content = unknownToolMessage(call.name, registry.names())
           send({
             requestId,
             type: 'tool-result',
@@ -749,6 +770,23 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           })
           messages.push({ role: 'tool', tool_call_id: call.id, content })
         }
+      }
+
+      // İlerlemesiz döngü koruması: birkaç turdur metin üretilmiyorsa modele
+      // "bulguları raporla" yönlendirmesi verilir. Araç çağrısı engellenmez —
+      // yalnızca hatırlatma yapılır (bkz. progressGuard.ts).
+      stepHistory.push({
+        contentLength: (result.content ?? '').trim().length,
+        tools: result.toolCalls.map((call) => call.name)
+      })
+      if (shouldNudgeProgress(stepHistory, nudgesSent)) {
+        const nudge = progressNudgeMessage(nudgesSent)
+        nudgesSent += 1
+        messages.push({ role: 'user', content: nudge })
+        log.warn(
+          `İlerlemesiz döngü: ${stalledStreak(stepHistory)} adım metinsiz — ` +
+            `yönlendirme #${nudgesSent} gönderildi`
+        )
       }
     }
 

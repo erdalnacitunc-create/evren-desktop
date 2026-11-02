@@ -82,6 +82,17 @@ export interface MemoryEntry {
   lastUsedAt?: number
   pinned: boolean
   embedding?: number[]
+  /**
+   * Bu anı **geçici bir gözlemdir** (donanım envanteri, port listesi, IP,
+   * araç sürümü…). Araçla yeniden türetilebilir ve eskir.
+   *
+   * Bu alan olmayan eski kayıtlar yüklemede sınıflandırılır
+   * (`memory/memoryGuard.ts`). Geçici anılar silinmez ama modele
+   * "geçmiş gözlem, doğrula" uyarısıyla verilir.
+   */
+  volatile?: boolean
+  /** Geçicilik nedeni (tanılama/arayüz). */
+  volatileKind?: string
 }
 
 export interface MemorySettings {

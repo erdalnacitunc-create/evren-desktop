@@ -1,8 +1,12 @@
 import type { MemoryType } from '../../shared/types'
 import { sessions } from '../sessionRepository'
 import { getSettings } from '../settings'
+import { createLogger } from '../logger'
 import { embedTexts } from './embed'
 import { addMemory, listMemories } from './store'
+import { volatileReason, volatileReasonLabel } from './memoryGuard'
+
+const log = createLogger('memory')
 
 const MEMORY_TYPES = new Set<MemoryType>(['user', 'feedback', 'project', 'reference'])
 
@@ -94,6 +98,15 @@ export async function learnFromSession(
     'kullanıcı tercihleri, düzeltmeler, proje kararları, referans kaynakları.',
     'Geçici ayrıntıları, kod tabanından çıkarılabilecek şeyleri ve sırları atla.',
     'Zaten var olan anılarla aynı olanları üretme.',
+    // Donanım envanteri tuzağı: bu bilgiler araçla bir çağrıda yeniden
+    // öğrenilebilir, hafızada tutulunca eskir ve yanlış cevaba yol açar.
+    'ŞUNLARI ASLA anı olarak üretme (araçla her an yeniden öğrenilebilir):',
+    '- takılı USB aygıtları, VID/PID kimlikleri, aygıt adları',
+    '- COM/ttyUSB/ttyACM port listeleri',
+    '- IP adresleri, MAC adresleri, bağlı ağ/SSID bilgileri',
+    '- "şu anda bağlı/takılı/değil" türü anlık durum bildirimleri',
+    '- kurulu araç sürümleri (Python, esptool, adb, git…)',
+    '- makineye özgü dosya yolları (C:\\Users\\… gibi)',
     'Yanıtı SADECE şu şemada bir JSON dizisi olarak ver:',
     '[{"type":"user|feedback|project|reference","text":"...","confidence":0.0,"tags":["..."]}]',
     'En fazla 5 anı döndür. Uygun anı yoksa [] döndür.',
@@ -155,7 +168,18 @@ export async function learnFromSession(
     })
     .slice(0, 5)
 
-  const fresh = candidates.filter(
+  // Geçici gözlemler (donanım envanteri, port listesi, IP, araç sürümü…)
+  // hafızaya **yazılmaz**: araçla bir çağrıda güncel hâliyle öğrenilebilirler.
+  // Yazıldıklarında eskiyorlar ve modelin yanlış cevap vermesine yol açıyorlar
+  // (canlı koşuda: iki hafta önceki yanlış VID/PID anısı gemma'yı yanılttı).
+  const durable = candidates.filter((item) => {
+    const reason = volatileReason(item.text)
+    if (!reason) return true
+    log.info(`Geçici anı kaydedilmedi (${volatileReasonLabel(reason)}): ${item.text.slice(0, 80)}`)
+    return false
+  })
+
+  const fresh = durable.filter(
     (item) => !isDuplicate(item.text, existingTexts)
   )
 

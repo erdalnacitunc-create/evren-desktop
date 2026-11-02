@@ -18,6 +18,7 @@ import {
 } from 'path'
 import { promisify } from 'util'
 import { getSettings, updateSettings } from './settings'
+import { unwrapNestedPowerShell } from './commandShell'
 import { sessions } from './sessionRepository'
 import { withAndroidPath } from './android'
 import { extractPdfText } from './pdf'
@@ -1129,6 +1130,10 @@ export async function runWorkspaceCommand(
     Math.max(1000, Math.round(Number(options.timeoutMs) || 60_000))
   )
   const isWindows = process.platform === 'win32'
+  // Model komutu `powershell -Command "..."` ile sarmaladıysa iç betiği çıkar:
+  // dış katman zaten PowerShell, çift ayrıştırma `$_`'yi boşaltıyor.
+  const unwrapped = isWindows ? unwrapNestedPowerShell(command) : null
+  const script = unwrapped ?? command
   const file = isWindows ? 'powershell.exe' : '/bin/sh'
   // Windows PowerShell varsayılan olarak OEM kod sayfasında (TR için cp857)
   // yazar; bu da Türkçe karakterlerin bozulmasına yol açar. UTF-8'e zorluyoruz.
@@ -1137,7 +1142,7 @@ export async function runWorkspaceCommand(
       `[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);` +
       `$OutputEncoding=[System.Text.UTF8Encoding]::new($false);`
     : `export LC_ALL=C.UTF-8 LANG=C.UTF-8 2>/dev/null; `
-  const effectiveCommand = `${utf8Prefix}${command}`
+  const effectiveCommand = `${utf8Prefix}${script}`
   // Windows'ta komutu -Command ile geçmek tırnak/kaçış/uzunluk sorunlarına yol
   // açar: modelin ürettiği $ değişkenli, çok satırlı veya tırnak yoğun
   // scriptler sessizce bozulur. -EncodedCommand komutu UTF-16LE + base64

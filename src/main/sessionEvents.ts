@@ -2,6 +2,7 @@ import { appendFile, mkdir, readFile } from 'fs/promises'
 import { join } from 'path'
 import { app } from 'electron'
 import { createLogger } from './logger'
+import { rotateEventsFile } from './sessionEventsRotation'
 
 /**
  * Kalıcı oturum olay günlüğü — OpenCode `Event.durable` + `SessionProjector`
@@ -97,9 +98,16 @@ function targetFile(): string {
 
 /**
  * Bir olayı günlüğe ekler.
- * Yazma başarısız olursa **fırlatmaz**; akış günlük yüzünden durmamalı.
+ * Yazma başarısız olursa **fırlatmaz**; akış günlük yüzden durmamalı.
  * Ama hatayı loglar ve `false` döner.
+ *
+ * Döndürme: her 500 olayda bir dosya boyutu kontrol edilir; eşik aşıldıysa
+ * arşivlenir (bkz. `sessionEventsRotation.ts`). Kontrol seyrek yapılır çünkü
+ * `stat` çağrısı her olayda ek maliyet olurdu.
  */
+let appendCount = 0
+const ROTATE_CHECK_EVERY = 500
+
 export async function appendSessionEvent(
   event: Omit<SessionEvent, 'at'> & { at?: number }
 ): Promise<boolean> {
@@ -113,6 +121,12 @@ export async function appendSessionEvent(
   try {
     const file = targetFile()
     await mkdir(app.getPath('userData'), { recursive: true })
+
+    appendCount += 1
+    if (appendCount % ROTATE_CHECK_EVERY === 0) {
+      await rotateEventsFile(file).catch(() => undefined)
+    }
+
     await appendFile(file, `${JSON.stringify(record)}\n`, 'utf8')
     return true
   } catch (error) {

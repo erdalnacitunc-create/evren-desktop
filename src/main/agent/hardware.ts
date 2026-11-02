@@ -94,6 +94,17 @@ export interface UsbDevice {
   status: string
   vendorId?: string
   productId?: string
+  /**
+   * Aygıtın kendi bildirdiği ürün adı (USB iProduct dizesi).
+   *
+   * Windows'un `FriendlyName` alanı bileşik aygıtlarda yalnızca sürücü sınıfını
+   * söyler ("USB Bileşik Aygıt"); gerçek ürün adı bu alanda durur. Bu alan
+   * olmadan model yalnızca VID/PID ile tahmin yürütür ve yanlış marka
+   * uydurabilir (canlı koşuda gözlendi: 0B05:6206 → "ASIX Ethernet").
+   */
+  productName?: string
+  /** Sürücünün bildirdiği üretici (ör. Logitech). */
+  manufacturer?: string
 }
 
 export interface SerialPort {
@@ -116,10 +127,17 @@ $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
-$usb = Get-PnpDevice -PresentOnly -Class USB |
-  Select-Object @{n='name';e={$_.FriendlyName}},
-                @{n='instanceId';e={$_.InstanceId}},
-                @{n='status';e={[string]$_.Status}}
+$usb = Get-PnpDevice -PresentOnly -Class USB | ForEach-Object {
+  $bus = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_BusReportedDeviceDesc' -ErrorAction SilentlyContinue).Data
+  $man = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_Manufacturer' -ErrorAction SilentlyContinue).Data
+  [pscustomobject]@{
+    name         = $_.FriendlyName
+    instanceId   = $_.InstanceId
+    status       = [string]$_.Status
+    productName  = [string]$bus
+    manufacturer = [string]$man
+  }
+}
 
 $serial = Get-CimInstance Win32_SerialPort |
   Select-Object @{n='device';e={$_.DeviceID}},
@@ -149,7 +167,13 @@ async function queryWindowsUsb(): Promise<{
     )
     const raw = String(result.stdout ?? '').trim()
     const parsed = JSON.parse(raw || '{}') as {
-      usb?: Array<{ name?: string; instanceId?: string; status?: string }>
+      usb?: Array<{
+        name?: string
+        instanceId?: string
+        status?: string
+        productName?: string
+        manufacturer?: string
+      }>
       serial?: Array<{ device?: string; description?: string; pnpDeviceId?: string }>
       disks?: Array<{ model?: string; serial?: string }>
     }
@@ -157,12 +181,22 @@ async function queryWindowsUsb(): Promise<{
       .filter((item) => item.instanceId)
       .map((item) => {
         const match = /VID_([0-9A-F]{4})&PID_([0-9A-F]{4})/i.exec(item.instanceId ?? '')
+        // Sürücü INF'inden gelen genel etiketler ürün adı sayılmaz:
+        // "(Standart USB Ana Bilgisayar Denetleyicisi)" gibi değerler ayırt
+        // edici bilgi taşımaz ve modeli yanıltır.
+        const product = (item.productName ?? '').trim()
+        const manufacturer = (item.manufacturer ?? '').trim()
+        const usefulProduct = product && !/^\(/.test(product) ? product : undefined
+        const usefulManufacturer =
+          manufacturer && !/^\(/.test(manufacturer) ? manufacturer : undefined
         return {
           name: item.name ?? '(bilinmiyor)',
           instanceId: item.instanceId ?? '',
           status: item.status ?? 'Unknown',
           vendorId: match?.[1]?.toUpperCase(),
-          productId: match?.[2]?.toUpperCase()
+          productId: match?.[2]?.toUpperCase(),
+          productName: usefulProduct,
+          manufacturer: usefulManufacturer
         }
       })
     const serial: SerialPort[] = (parsed.serial ?? [])
@@ -179,6 +213,35 @@ async function queryWindowsUsb(): Promise<{
   } finally {
     void fs.unlink(file).catch(() => undefined)
   }
+}
+
+/**
+ * USB aygıt listesini modele verilecek metne çevirir.
+ *
+ * Ürün adı varsa gösterilir; yoksa modele "tahmin etme" kuralı hatırlatılır.
+ * Ayrı fonksiyon olmasının nedeni test edilebilirlik: biçimlendirme saf.
+ */
+export function usbDeviceReport(devices: UsbDevice[], needle?: string): string {
+  const lines: string[] = []
+  for (const item of devices.slice(0, 60)) {
+    const vidPid = item.vendorId ? ` VID_${item.vendorId}&PID_${item.productId ?? '?'}` : ''
+    const label =
+      item.productName && item.productName !== item.name
+        ? `${item.name} — ${item.productName}`
+        : item.name
+    const maker = item.manufacturer ? ` (üretici: ${item.manufacturer})` : ''
+    lines.push(`- ${label}${maker} [${item.status}]${vidPid}`)
+    lines.push(`  ${item.instanceId}`)
+  }
+  if (devices.length === 0) {
+    lines.push(needle ? `- (eşleşen USB aygıtı yok: ${needle})` : '- (eşleşen USB aygıtı yok)')
+  }
+  lines.push(
+    '',
+    'Not: ürün adı aygıtın kendi bildirdiği dizedir; boşsa aygıt bildirmiyordur. ' +
+      'Marka/model tahmin etmeyin — emin değilseniz ürün adını "bilinmiyor" diye raporlayın.'
+  )
+  return lines.join('\n')
 }
 
 async function queryLinuxUsb(): Promise<{

@@ -6,6 +6,7 @@ import {
   listMemories,
   markMemoriesUsed
 } from './store'
+import { VOLATILE_MEMORY_CAVEAT } from './memoryGuard'
 
 function tokenize(text: string): string[] {
   return text
@@ -74,7 +75,11 @@ export async function retrieveMemories(
     const pin = entry.pinned ? 0.15 : 0
     const typeWeight =
       entry.type === 'feedback' ? 1.05 : entry.type === 'user' ? 1.03 : 1
-    const score = (semantic * 0.65 + keyword * 0.2 + recency * 0.1 + pin) * typeWeight
+    // Geçici anılar (donanım envanteri, port listesi…) daha çok eskir;
+    // kalıcı bilgilerin önüne geçmesinler. Pin'li olanlar muaf.
+    const volatility = entry.volatile && !entry.pinned ? 0.75 : 1
+    const score =
+      (semantic * 0.65 + keyword * 0.2 + recency * 0.1 + pin) * typeWeight * volatility
     return { entry, score }
   })
 
@@ -120,9 +125,21 @@ export async function buildMemoryContext(
   if (memories.length > 0) {
     parts.push(
       `İlgili anılar:\n${memories
-        .map((entry) => `- [${entry.type}] ${entry.text}`)
+        .map((entry) =>
+          entry.volatile
+            ? `- [${entry.type}] (${VOLATILE_MEMORY_CAVEAT}) ${entry.text}`
+            : `- [${entry.type}] ${entry.text}`
+        )
         .join('\n')}`
     )
+    if (memories.some((entry) => entry.volatile)) {
+      parts.push(
+        'Yukarıdaki "GEÇMİŞ GÖZLEM" işaretli anılar eski bir ana ait envanter/'
+          + 'durum bilgisidir. Güncel değeri gerekiyorsa ilgili araçla (ör. '
+          + 'usb_devices, run_command) doğrula ve çelişki varsa araç sonucunu '
+          + 'esas al. Bu anılardaki marka/model bilgisine güvenip tahmin yürütme.'
+      )
+    }
   }
 
   return parts.join('\n\n')

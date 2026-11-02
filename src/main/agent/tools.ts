@@ -20,7 +20,7 @@ import {
 import { callPluginTool, listPluginTools, type AgentPluginTool } from '../plugins/manager'
 import { BrowserSession } from './browser'
 import { runLighthouseAudit } from '../lighthouse'
-import { queryUsbInventory, runPythonScript } from './hardware'
+import { queryUsbInventory, runPythonScript, usbDeviceReport } from './hardware'
 import { waitForQuestion } from './question'
 import { captureScreen, runComputerCommand, toSendKeys } from './computer'
 import {
@@ -93,6 +93,8 @@ export interface ToolDefinition {
 export interface ToolRegistry {
   definitions: () => unknown[]
   get: (name: string) => ToolDefinition | undefined
+  /** Kayıtlı araç adları — yanlış ad önerisi için. */
+  names: () => string[]
   dispose: () => Promise<void>
 }
 
@@ -1871,11 +1873,7 @@ export function createTools(options: {
         `USB aygıtları: ${devices.length}/${inventory.devices.length}` +
           (needle ? ` (filtre: ${needle})` : '')
       )
-      for (const item of devices.slice(0, 60)) {
-        const vidPid = item.vendorId ? ` VID_${item.vendorId}&PID_${item.productId ?? '?'}` : ''
-        lines.push(`- ${item.name} [${item.status}]${vidPid}`)
-        lines.push(`  ${item.instanceId}`)
-      }
+      lines.push(usbDeviceReport(devices, needle))
       if (devices.length === 0) lines.push('- (eşleşen USB aygıtı yok)')
 
       lines.push('', `Seri portlar: ${ports.length}`)
@@ -2465,6 +2463,7 @@ export function createTools(options: {
         }
       })),
     get: (name) => byName.get(name),
+    names: () => orderedTools.map((tool) => tool.name),
     dispose: async () => {
       if (browser) await browser.close()
     }

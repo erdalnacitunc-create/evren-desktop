@@ -352,3 +352,234 @@ uygulama yeniden başlasa da çakışma olmaz.
 | `event-log-e2e-test` | 21 | startChat → günlük → projeksiyon = depo |
 
 Toplam: **38 paket / 801 kontrol**.
+
+## 13. Canlı koşu bulguları ve düzeltmeler (0.4.2)
+
+Aynı sorgu ("usb bağlantılarını tara…") dört modelle paralel çalıştırıldı ve
+olay günlüğüyle karşılaştırıldı. Sonuçlar:
+
+| Oturum | Model | Süre | Metin | Düşünme | Araç | Bitiş |
+|---|---|---|---|---|---|---|
+| `3475cdc2` | deepseek-v4.1-flash | 19.1 dk | 2575 | 19 095 | 30 | `stop` |
+| `992dae3b` | deepseek-v4.1-flash | 11.0 dk | 1769 | 6668 | 21 | `stop` |
+| `cdbaef62` | mimo-v2.6-pro | 5.7 dk | 2190 | 3371 | 10 | `stop` |
+| `1f846854` | gemma-4-31b | 2.9 dk | 916 | 1164 | 1 | `stop` |
+
+4514 olay, **0 bozuk satır**, 4/4 tamamlandı, hiç retry/continuation tetiklenmedi.
+
+`992dae3b` — önceki sürümde **0 karakterle `max-steps`** hatası veren oturum —
+bu koşuda 1769 karakter, 21 araç ve temiz `stop` ile bitti. Adım sınırının
+kaldırılması bildirilen arızayı çözdü.
+
+Koşu dört gerçek kusuru ortaya çıkardı; dördü de bu sürümde kapatıldı.
+
+### 13.1 `usb_devices` ürün adını vermiyordu → model marka uydurdu
+
+**Belirti.** gemma tek araç çağrısıyla `VID_0B05&PID_6206` için "ASIX
+Electronics Corp Gigabit Ethernet adaptörü" dedi. Aygıt gerçekte **C-Media
+ses kartı**. mimo aynı yanlışı fark edip "önceki kayıtlarda ASIX yazıyordu"
+diye not düştü — yani hata kayıttan kaynağa taşınmış.
+
+**Neden.** Araç yalnızca Windows `FriendlyName` alanını okuyordu; bileşik
+aygıtlarda bu alan sürücü sınıfıdır ("USB Bileşik Aygıt"), ürün adı değil.
+Model elinde yalnızca VID/PID görünce markayı tahmin etti.
+
+**Düzeltme** (`src/main/agent/hardware.ts`):
+- `DEVPKEY_Device_BusReportedDeviceDesc` (aygıtın kendi bildirdiği ürün adı) ve
+  `DEVPKEY_Device_Manufacturer` okunuyor.
+- `UsbDevice` tipine `productName` ve `manufacturer` eklendi.
+- Sürücü INF'inden gelen parantezli genel etiketler ("(Standart USB Ana
+  Bilgisayar Denetleyicisi)") ürün adı sayılmıyor.
+- `usbDeviceReport()` saf fonksiyonu çıktıyı biçimlendiriyor ve modele
+  "marka/model tahmin etme, bilinmiyorsa bilinmiyor yaz" kuralını hatırlatıyor.
+
+**Doğrulama.** Bu makinede 12 aygıtın 9'unda ürün adı okundu:
+`0B05:6206 → C-Media(R) Audio`, `2B7E:B597 → USB2.0 HD UVC WebCam`.
+
+### 13.2 İç içe `powershell -Command` `$_`'yi boşaltıyordu
+
+**Belirti.** 5 araç hatasının 4'ü aynı sınıftandı:
+
+```text
+Where-Object : The term '.InstanceId' is not recognized...
+```
+
+**Neden.** `run_command` komutu zaten PowerShell içinde `-EncodedCommand` ile
+çalıştırır. Model komutu tekrar `powershell -Command "… $_ …"` ile sarmalayınca
+**dış** katman çift tırnak içindeki `$_`'yi kendi kapsamında açar; üst kapsamda
+`$_` tanımsız olduğu için boşalır ve iç komuta `.InstanceId` ulaşır.
+
+`cmd.exe /c` ile çalıştırmak denendi: Windows tırnak kuralları Node'un argüman
+kaçışıyla çakıştığı için kırılgan (`exit 7` bile 0 dönüyordu).
+
+**Düzeltme** (`src/main/commandShell.ts`, `src/main/workspace.ts`):
+- `unwrapNestedPowerShell()` komutun tamamı tek bir sarmalanmış çağrıysa iç
+  betiği çıkarır; dış katman zaten PowerShell olduğu için betik **bir kez**
+  ayrıştırılır ve `$_` doğru kapsamda açılır.
+- `-File` kullanımı, kısmi sarmalama (`cd X; powershell …`) ve zincirleme
+  sarmalama çözülmez — davranışları zaten doğru.
+- Kaçış biçimleri normalize edilir: `""`, `''`, `\"`.
+- Sistem istemine kural eklendi: komutu sarmalama; uzun betik için `.ps1`
+  yazıp `-File` ile çalıştır.
+
+### 13.3 `run_code` gibi var olmayan araç adları
+
+**Belirti.** `Bilinmeyen araç: run_code` — doğrusu `execute` idi ve mesaj bunu
+söylemediği için model bir tur kaybetti.
+
+**Düzeltme** (`src/main/agent/toolSuggest.ts`):
+- `ToolRegistry.names()` eklendi.
+- `suggestTool()` sırayla dener: bilinen takma ad (`run_code → execute`,
+  `bash → run_command`, `read → read_file` …), normalize birebir eşleşme
+  (`Read_File → read_file`), önek eşleşmesi, ölçekli Levenshtein mesafesi.
+- Eşik altında kalırsa **öneri yapılmaz** — yanlış aracı çalıştırmak daha
+  kötüdür.
+- Hem ana döngü hem alt ajan aynı mesajı kullanır.
+
+### 13.4 Adım sınırı kalkınca ilerlemesiz döngü
+
+**Belirti.** `3475cdc2` 19 dakikanın yaklaşık 8 dakikasını `scan_usb.ps1` →
+`scan_usb2.ps1` … `scan_usb6.ps1` yazarak geçirdi (30 araç, 19k düşünme).
+Sonunda rapor yazıldı, yani felaket değil; ama işin 2-3 katı sürdü.
+
+**Neden.** Sert adım sınırı kaldırıldı ve modele "ne zaman duracağı" hakkında
+hiçbir sinyal kalmadı. Sınırı geri getirmek eski "0 karakter + max-steps"
+hatasını döndürür — yanlış çözüm.
+
+**Düzeltme** (`src/main/agent/progressGuard.ts`):
+- Bir adım "ilerlemesiz" sayılır: metin boş **ve** en az bir araç çağrıldı.
+- Son **4** adım böyleyse modele yönlendirme gönderilir: "bulguları şimdi
+  raporla, yeni tarama başlatma".
+- En çok **2** yönlendirme: birincisi yumuşak, ikincisi kesin ("araç çağırmayı
+  şimdi bırak").
+- Araç çağrısı **engellenmez** — yalnızca hatırlatma. Model uymazsa çalışma
+  durmaz, sadece iki kez uyarılır.
+- Eşik ve üst sınır yapılandırılabilir (`threshold`, `maxNudges`).
+
+## 14. Test kapsamı (0.4.2)
+
+| Paket | Kontrol | Kapsam |
+|---|---|---|
+| `usb-inventory-test` | 12 | Ürün adı okunuyor, genel etiket filtreleniyor, ASIX yanlışı yok |
+| `tool-suggest-test` | 42 | Takma ad, normalize, mesafe, uzağa öneri yok |
+| `command-shell-test` | 30 | Sarmalama çözme, `$_` korunuyor, `-File`/kısmi dokunulmaz, Türkçe, çok satır |
+| `progress-guard-test` | 30 | Eşik, pencere, üst sınır, seri hesabı |
+| `progress-nudge-e2e-test` | 7 | Gerçek akış: 4 metinsiz adım → yönlendirme 5. istekte |
+
+Toplam: **43 paket / 922 kontrol**.
+
+## 15. Hafıza kirliliği: geçici gözlemler kalıcı anı olmuş (0.4.2)
+
+### Belirti
+
+Canlı koşuda gemma `0B05:6206` için "ASIX Gigabit Ethernet" dedi. Aygıt
+gerçekte C-Media ses kartıydı. mimo aynı yanlışı fark etti ama yine de
+"önceki kayıtlarda ASIX yazıyordu" diye dolaşıma soktu.
+
+### Kök neden
+
+Kullanıcının hafıza dosyası incelendi (`%APPDATA%\EVREN Desktop Beta\memory`).
+13 anı vardı; **1 Kasım'da kaydedilmiş** kayıt:
+
+```
+[reference] Bağlı USB aygıtları arasında ASIX Electronics Corp Gigabit
+Ethernet adaptörü (VID_0B05&PID_6206) ve VID_2B7E&PID_B597 kimlikli bir
+aygıt bulunmaktadır.
+```
+
+Bu bilgi o gün de yanlıştı. İki hafta sonra model onu **güncel gerçek** sandı.
+
+Aynı dosyada başka bayat kayıtlar da vardı:
+
+| Anı | Bugünkü gerçek |
+|---|---|
+| "Bu ortamda kabuk/terminal aracı yok" | `run_command` var |
+| "USB portuna bağlı TP-Link 4G modem bulunuyor" | bağlı değil |
+| "Kullanıcının bağlı Android telefonu var" | o an bağlı değil |
+| "COM5, COM7, COM9 …" | değişebilir |
+
+### Kural
+
+**Hafıza, araçların ucuzca yeniden türetebileceği şeyleri tutmamalı.**
+Takılı USB aygıtları, COM portları, IP adresleri, kurulu araç sürümleri —
+hepsi tek araç çağrısıyla güncel hâliyle öğrenilebilir. Hafızada tuttuklarında
+eskimek zorunda kalırlar.
+
+### Düzeltme
+
+**`src/main/memory/memoryGuard.ts`** — `volatileReason(text)`:
+
+| Sınıf | Örnek |
+|---|---|
+| `usb-inventory` | VID/PID, `USB\VID_…`, "COM5 portu" |
+| `serial-port` | iki veya daha çok COM portu, `ttyUSB0` |
+| `network-address` | IP, MAC, RSSI, "SSID … bağlı" |
+| `device-connection` | "şu anda bağlı", "portuna bağlı", "bağlı … bulunuyor" |
+| `tool-version` | "esptool 5.3.1", "Python 3.13.12" |
+| `tool-availability` | "kabuk/terminal aracı yok" |
+| `filesystem-path` | `C:\Users\…` |
+
+**Üç noktada uygulanır:**
+
+1. **Çıkarma** (`extract.ts`): bu sınıfa giren adaylar **kaydedilmez**;
+   nedeni loglanır. İstem ayrıca modeli açıkça uyarır ("bunları anı olarak
+   üretme").
+2. **Göç** (`store.ts` → `demoteVolatileEntries`): eski kayıtlar **silinmez**
+   (kullanıcı verisi) ama `volatile: true` + `volatileKind` ile işaretlenir.
+   İdempotenttir; `volatile` alanı zaten tanımlıysa dokunulmaz.
+3. **Geri getirme** (`retrieve.ts`): geçici anılar %25 puan cezası alır
+   (pin'li olanlar muaf) ve modele şu uyarıyla verilir:
+
+   ```
+   - [reference] (GEÇMİŞ GÖZLEM — güncel olmayabilir; kullanmadan önce
+     ilgili araçla doğrula.) Bağlı USB aygıtları arasında ASIX …
+   ```
+
+   Bağlama ek bir paragraf eklenir: "GEÇMİŞ GÖZLEM işaretli anılar eski bir
+   ana ait envanter bilgisidir; güncel değeri ilgili araçla doğrula ve
+   çelişki varsa araç sonucunu esas al."
+
+### Neden silmiyoruz
+
+Yanlış kayıt silinebilirdi ama:
+- Kullanıcı verisidir; sessiz silme geri alınamaz.
+- Sınıflandırma sezgiseldir; "yanlış pozitif" bir kalıcı anıyı silebilir.
+
+İşaretleme + uyarı, veriyi korurken zararı durdurur: model artık ya doğrular
+ya da "doğrulanamadı" der.
+
+### Doğrulama
+
+Gerçek kullanıcı dosyasındaki 13 anının metni test verisi olarak kullanıldı
+(`memory-guard-test` §11): 5'i geçici olarak işaretlenir, "salt-okunur
+yaklaşım" gibi kalıcı kayıtlar korunur, ikinci geçiş hiçbir şeyi değiştirmez.
+
+## 16. Olay günlüğü döndürmesi (0.4.2)
+
+`session-events.jsonl` hiç küçülmüyordu; canlı koşu 4514 olay / 1.1 MB üretti.
+
+**`src/main/sessionEventsRotation.ts`:**
+
+- Eşik: **8 MB**. Aşıldığında dosya `session-events.<ISO>.jsonl` olarak
+  arşivlenir, boş günlükle devam edilir.
+- En yeni **3** arşiv tutulur, eskiler silinir.
+- Kontrol her **500** olayda bir yapılır (her olayda `stat` maliyeti olmasın).
+- Döndürme **asla akışı durdurmaz**: hata loglanır, yazma sürer.
+- `shouldRotate` / `archiveName` / `archivesToDelete` saf fonksiyonlardır.
+- ISO zaman damgası sıralanabilir olduğu için "en yeni N" mantığı dosya adı
+  sıralamasıyla çalışır; Windows için `:` ve `.` tireye çevrilir.
+
+## 17. Test kapsamı (0.4.2)
+
+| Paket | Kontrol | Kapsam |
+|---|---|---|
+| `usb-inventory-test` | 12 | Ürün adı, genel etiket filtresi, ASIX yanlışı yok |
+| `tool-suggest-test` | 42 | Takma ad, normalize, mesafe, uzağa öneri yok |
+| `command-shell-test` | 30 | Sarmalama çözme, `$_` korunuyor, `-File` dokunulmaz |
+| `progress-guard-test` | 30 | Eşik, pencere, üst sınır |
+| `progress-nudge-e2e-test` | 7 | Yönlendirme 5. istekte gidiyor |
+| `memory-guard-test` | 43 | Sınıflandırma, göç, idempotent, gerçek 13 anı |
+| `memory-pollution-test` | 15 | Kaydetme işareti, uyarılı geri getirme |
+| `session-rotation-test` | 32 | Karar, arşiv adı, keep, gerçek dosya |
+
+Toplam: **46 paket / 1012 kontrol**.

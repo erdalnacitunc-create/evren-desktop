@@ -3,6 +3,10 @@ import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { MemoryEntry, MemorySettings, MemoryType } from '../../shared/types'
 import { getSettings, updateSettings } from '../settings'
+import { createLogger } from '../logger'
+import { demoteVolatileEntries, volatileReason } from './memoryGuard'
+
+const log = createLogger('memory')
 
 interface MemoryData {
   entries: MemoryEntry[]
@@ -40,6 +44,16 @@ async function load(): Promise<MemoryData> {
 
   if (!Array.isArray(cache.entries)) cache.entries = []
   if (typeof cache.instructions !== 'string') cache.instructions = ''
+
+  // Eski sürümler geçici gözlemleri (USB envanteri, port listesi, IP…)
+  // kalıcı anı olarak kaydediyordu. Silmiyoruz — kullanıcı verisi — ama
+  // sınıflandırıp işaretliyoruz; modele "geçmiş gözlem, doğrula" diye gider.
+  const demoted = demoteVolatileEntries(cache.entries)
+  if (demoted > 0) {
+    log.info(`${demoted} geçici anı işaretlendi (geçmiş gözlem, doğrulanmalı)`)
+    void persist()
+  }
+
   return cache
 }
 
@@ -96,6 +110,7 @@ export async function addMemory(input: {
   }
 
   const now = Date.now()
+  const reason = volatileReason(text)
   const entry: MemoryEntry = {
     id: crypto.randomUUID(),
     type: input.type,
@@ -105,7 +120,9 @@ export async function addMemory(input: {
     createdAt: now,
     updatedAt: now,
     pinned: input.pinned ?? false,
-    embedding: input.embedding
+    embedding: input.embedding,
+    volatile: reason !== null,
+    ...(reason ? { volatileKind: reason } : {})
   }
   data.entries.push(entry)
 
@@ -216,4 +233,12 @@ export async function markMemoriesUsed(ids: string[]): Promise<void> {
     if (set.has(entry.id)) entry.lastUsedAt = now
   }
   await persist()
+}
+
+/**
+ * Testler için: bellek önbelleğini sıfırlar.
+ * `userData` yolu değiştirildiğinde eski içeriğin sızmasını engeller.
+ */
+export function __resetMemoryCacheForTests(): void {
+  cache = null
 }

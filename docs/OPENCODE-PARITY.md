@@ -583,3 +583,121 @@ yaklaşım" gibi kalıcı kayıtlar korunur, ikinci geçiş hiçbir şeyi deği�
 | `session-rotation-test` | 32 | Karar, arşiv adı, keep, gerçek dosya |
 
 Toplam: **46 paket / 1012 kontrol**.
+
+## 18. Kalıcı retry hiç çalışmıyordu (0.4.3)
+
+### Belirti
+
+0.4.2 canlı koşusunda (6 paralel model) mimo oturumu **3 retry** aldı
+(`Model şu anda dolu` / HTTP 429). Olay günlüğünde retry'ler görünüyordu,
+ama `sessions.json` içinde **hiç** `retry` alanı yoktu:
+
+```
+depo sürümü: 2 | oturum: 6
+retry alanı olan oturum: 0
+```
+
+Yani 0.4.1'de eklenen "kalıcı yeniden deneme durumu" özelliği **hiç
+çalışmıyordu**; testler yakalamamıştı çünkü yalnızca saf mantık sınanıyordu.
+
+### Kök neden
+
+`patchAssistantRetry` mesajı `requestId` ile arıyordu:
+
+```ts
+if (!session.messages.some((m) => m.requestId === requestId)) return
+```
+
+Ama asistan mesajı **akış bitince** yazılıyor (`persist()`), retry bilgisi ise
+akış **sürerken** gerekiyor. Retry anında mesaj yok → koşul sağlanmıyor →
+yazma sessizce boşa gidiyor. İki ayrı kopya vardı (`chat.ts` ve
+`agent/loop.ts`) ve **ikisinde de** aynı boşluk vardı; ajan yolu kullanıldığı
+için hiçbiri yazmıyordu.
+
+### Düzeltme
+
+**`src/main/retryState.ts`** — tek ortak uygulama:
+
+- `retry` verilmiş ve mesaj yoksa **yer tutucu** asistan mesajı açılır
+  (`content: ''`, `retry` dolu). OpenCode da asistan mesajını akış başında
+  oluşturur.
+- Mesaj varsa `retry` yazılır ya da temizlenir.
+- `retry: null` ve mesaj yoksa boş mesaj yaratılmaz.
+- Hata durumunda fırlatmaz; akış sürer.
+
+**Başarıda temizlik.** Retry yer tutucusu, akış başarıyla bitince
+temizlenmeli. İlk denemede ayrı bir "temizle" yazımı `persist()` ile
+**yarıştı** ve eski değeri geri getirdi. Bu yüzden temizlik `persist()`
+içine taşındı: mesaj güncellenirken `retry` alanı açıkça silinir — tek
+yazma, yarış yok.
+
+**Boş yer tutucu temizliği.** Akış hiç metin üretmeden hata verirse
+`dropEmptyPlaceholder` mesajı kaldırır; arayüzde boş asistan balonu kalmaz.
+
+### Doğrulama (`persist-retry-test`, 11 kontrol)
+
+Sahte sağlayıcı ilk istekte 429 döner:
+
+| Kontrol | Sonuç |
+|---|---|
+| bekleme penceresinde `retry` kayda yazıldı | ✅ |
+| deneme numarası 1, hata türü `Retryable` | ✅ |
+| zaman damgası ileriye bakıyor (geri sayım için) | ✅ |
+| sunucuya 2 istek, arada ~2 sn bekleme | ✅ |
+| başarıdan sonra `retry` temizlendi | ✅ |
+| tek asistan mesajı (yer tutucu yeniden kullanıldı) | ✅ |
+
+## 19. Canlı doğrulama: altı model, aynı sorgu (0.4.2)
+
+0.4.2 yayınlandıktan sonra aynı USB sorgusu altı modelle paralel çalıştırıldı.
+**11694 olay, 0 bozuk satır, 6/6 tamamlandı.**
+
+| Oturum | Model | Süre | Metin | Araç | ASIX |
+|---|---|---|---|---|---|
+| `267b848f` | gemma-4-31b | 0.8 dk | 1299 | 1 | yok |
+| `91adf438` | deepseek-v4.1-flash | 3.7 dk | 2518 | 7 | düzeltme |
+| `5cc7a63d` | glm-5.3 | 4.6 dk | 1509 | 2 | düzeltme |
+| `b5fe700e` | deepseek-v4.1-flash | 5.9 dk | 3350 | 8 | düzeltme |
+| `3ff4e4de` | qwen3.8-flash-next | 9.3 dk | 4695 | 9 | yok |
+| `d1ed8fee` | mimo-v2.6-pro | 11.2 dk | 2247 | 5 | düzeltme (3 retry) |
+
+### Düzeltmelerin canlı kanıtı
+
+**Ürün adı (5.1).** gemma aynı model, aynı sorgu, aynı 1 araç:
+
+| 0.4.1 | 0.4.2 |
+|---|---|
+| ❌ "ASIX Gigabit Ethernet" | ✅ "C-Media Audio — Ses adaptörü" |
+| "VID_2B7E&B597 kimlikli bir aygıt" | ✅ "USB 2.0 HD UVC WebCam" |
+
+**Hafıza kirliliği (5.5).** Açılışta log: `6 geçici anı işaretlendi
+(geçmiş gözlem, doğrulanmalı)`. ASIX'in geçtiği her yanıt bir **düzeltme**:
+
+- deepseek: *"Ürün adı 'ASIX Ethernet' değil; C-Media ses arayüzü.
+  Marka/model doğrulanamadı"*
+- mimo: *"Eski gözlemlerle çelişki var: `VID_0B05&PID_6206` artık ASIX
+  Ethernet değil, C-Media USB ses cihazı. Araç sonucu esas alındı."*
+- glm: *"Geçmişte 'ASIX' olarak not edilen kimlik, aygıtın kendi bildirdiği
+  adla C-Media ses aygıtı olarak raporlandı (marka tahmini yapmadım)"*
+
+**Komut sarmalama (5.2).** Yeni koşuda 32 araç çağrısının yalnızca 1'i
+`powershell` içeriyor ve o da doğru desen: `-File .\usb_scan\inspect.ps1`
+(uzun betik dosyaya yazılmış). Tek `run_command` hatası geçersiz `-Class`
+üyesinden (çıktı yine üretilmiş); `$_` bozulması **sıfır**.
+
+**Araç önerisi (5.3).** `run_code` çağrısı **sıfır** (önceki koşuda 1 hata).
+
+**İlerlemesiz döngü (5.4).** Yönlendirme 3 kez tetiklendi
+(`4 adım metinsiz — yönlendirme #1`), her seferinde model rapora geçti;
+ikinci (kesin) yönlendirme hiç gerekmedi.
+
+**Verimlilik.** Önceki koşuda deepseek 30 araç / 19.1 dk ve 21 araç / 11.0 dk
+harcamıştı. Yeni koşuda aynı model: **8 araç / 5.9 dk** ve **7 araç / 3.7 dk**.
+
+## 20. Test kapsamı (0.4.3)
+
+| Paket | Kontrol | Kapsam |
+|---|---|---|
+| `persist-retry-test` | 11 | 429 → yer tutucu, kalıcı retry, başarıda temizlik |
+
+Toplam: **47 paket / 1023 kontrol**.

@@ -188,84 +188,79 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-# 0.4.2 Beta
+# 0.4.3 Beta
 
-## Bu sürümde: canlı koşudan çıkan altı düzeltme
+## Bu sürümde: kalıcı retry gerçekten çalışıyor
 
-Aynı sorgu dört modelle paralel çalıştırıldı (4514 olay, 0 bozuk satır, 4/4
-tamamlandı) ve olay günlüğü sonuçlarla karşılaştırıldı. Ayrıntılar
-`docs/OPENCODE-PARITY.md` §13-17.
+0.4.2 yayınlandıktan sonra aynı USB sorgusu altı modelle paralel çalıştırıldı
+(11694 olay, 0 bozuk satır, 6/6 tamamlandı). Koşu, 0.4.1'de eklenen bir
+özelliğin **hiç çalışmadığını** ortaya çıkardı.
 
-### 1. USB aygıtları artık gerçek ürün adıyla geliyor
-`usb_devices` yalnızca Windows `FriendlyName` alanını okuyordu; bileşik
-aygıtlarda bu sürücü sınıfıdır, ürün adı değil. Model elinde yalnızca VID/PID
-görünce marka uydurdu — `0B05:6206` için "ASIX Ethernet" dedi, gerçekte
-C-Media ses kartı.
+### Bulgu
 
-Artık aygıtın kendi bildirdiği ürün adı ve üretici okunuyor, sürücünün genel
-etiketleri filtreleniyor ve modele "tahmin etme" kuralı iletiliyor.
+mimo oturumu 3 kez yeniden denedi ("Model şu anda dolu" / HTTP 429). Olay
+günlüğünde retry'ler görünüyordu ama `sessions.json` içinde **tek bir**
+`retry` alanı bile oluşmamıştı.
 
-### 2. `powershell -Command "… $_ …"` artık bozulmuyor
-Komutlar zaten PowerShell içinde çalışıyor; model tekrar sarmalayınca dış
-katman `$_`'yi boşaltıyor ve komut
-`The term '.InstanceId' is not recognized` ile düşüyordu (5 araç hatasının 4'ü).
-Sarmalayıcı artık çözülüyor, iç betik bir kez ayrıştırılıyor. `-File` ve kısmi
-sarmalama etkilenmiyor. Sistem istemine de "komutu sarmalama" kuralı eklendi.
+**Neden:** asistan mesajı akış *bitince* kaydediliyor, retry bilgisi ise akış
+*sürerken* yazılmak isteniyordu. Mesaj henüz yokken yazma sessizce boşa
+gidiyordu. İki kod yolu vardı (`chat.ts` ve ajan döngüsü) ve ikisinde de aynı
+boşluk vardı.
 
-### 3. Yanlış araç adı öneriyle dönüyor
-`Bilinmeyen araç: run_code` yerine artık
-`… Bunu mu demek istediniz: execute?` deniyor. Takma adlar (`bash`, `read`,
-`search` …), normalize eşleşme (`Read_File`), önek ve yazım mesafesi
-kullanılıyor. Yeterince yakın değilse öneri yapılmıyor.
+### Düzeltme
 
-### 4. İlerlemesiz döngü yönlendirmesi
-Adım sınırı kalktıktan sonra model bazen hiç metin üretmeden araç çağırıyordu
-(canlı koşuda 19 dk, 30 araç, `scan_usb.ps1` … `scan_usb6.ps1`).
+- Tek ortak uygulama: `src/main/retryState.ts`
+- İlk retry'de **yer tutucu** asistan mesajı açılır (OpenCode da mesajı akış
+  başında oluşturur), retry bilgisi oraya yazılır
+- Başarılı turda retry alanı **mesaj güncellenirken** silinir — ayrı bir
+  "temizle" yazımı `persist()` ile yarışıp eski değeri geri getiriyordu
+- Akış metinsiz hata verirse boş yer tutucu kaldırılır
 
-Son 4 adım metinsiz geçerse modele "bulguları şimdi raporla" hatırlatması
-gidiyor. Araç çağrısı **engellenmiyor**; en çok iki hatırlatma yapılıyor
-(birincisi yumuşak, ikincisi kesin).
+### Artık ne görüyorsunuz
 
-### 5. Hafıza kirliliği: geçici gözlemler kalıcı anı olmuyor
-Kök neden bulundu: hafızada **1 Kasım'da kaydedilmiş yanlış** bir kayıt vardı —
+Uygulama kapansa bile retry durumu geçmişte kalır: oturumu açtığınızda
+"yeniden deneniyor (2), 8 sn" gibi kalan süreyle bildirim görünür. Başarıyla
+bitince kaybolur.
 
-> "Bağlı USB aygıtları arasında ASIX Electronics Corp Gigabit Ethernet
-> adaptörü (VID_0B05&PID_6206)…"
+## Canlı doğrulama: 0.4.2 düzeltmeleri işe yaradı
 
-gemma bu anıyı okuyup aynı yanlışı tekrarladı. Aynı dosyada "bu ortamda kabuk
-aracı yok", "TP-Link 4G modem bağlı" gibi başka bayat kayıtlar da vardı.
+Aynı koşuda önceki sürümün düzeltmeleri de sınandı.
 
-**Kural:** Hafıza, araçların ucuzca yeniden türetebileceği şeyleri tutmamalı.
+**Ürün adı.** gemma aynı model, aynı sorgu, aynı tek araç:
 
-- USB envanteri, COM portları, IP/MAC, "şu anda bağlı" durumları, araç
-  sürümleri, makineye özgü yollar artık **anı olarak kaydedilmiyor**.
-- Eski kayıtlar **silinmiyor** (kullanıcı verisi); `volatile` olarak
-  işaretleniyor ve modele `GEÇMİŞ GÖZLEM — doğrula` uyarısıyla veriliyor.
-- Geri getirmede bu anılar puan cezası alıyor, kalıcı bilgilerin önüne
-  geçmiyor.
-- Mevcut hafızanız ilk açılışta otomatik sınıflandırılır; hiçbir anı kaybolmaz.
+| 0.4.1 | 0.4.2+ |
+|---|---|
+| ❌ "ASIX Gigabit Ethernet" | ✅ "C-Media Audio — Ses adaptörü" |
+| "VID_2B7E&B597 kimlikli bir aygıt" | ✅ "USB 2.0 HD UVC WebCam" |
 
-### 6. Olay günlüğü artık döndürülüyor
-`session-events.jsonl` hiç küçülmüyordu (canlı koşuda 4514 olay / 1.1 MB).
-8 MB'ı aşınca `session-events.<zaman>.jsonl` olarak arşivleniyor, en yeni
-3 arşiv tutuluyor. Döndürme akışı asla durdurmaz.
+**Hafıza kirliliği.** Açılışta 6 geçici anı işaretlendi. ASIX'in geçtiği her
+yanıt bir düzeltme oldu:
+
+> "Eski gözlemlerle çelişki var: `VID_0B05&PID_6206` artık ASIX Ethernet
+> değil, C-Media USB ses cihazı. Araç sonucu esas alındı." — mimo
+
+**Komut sarmalama.** 32 araç çağrısının 1'i `powershell` içeriyor, o da doğru
+desen (`-File betik.ps1`). `$_` bozulması sıfır.
+
+**Araç önerisi.** `run_code` çağrısı sıfır (önceki koşuda 1 hata).
+
+**İlerleme yönlendirmesi.** 3 kez tetiklendi, her seferinde model rapora
+geçti; kesin ikinci uyarı hiç gerekmedi.
+
+**Verimlilik.** deepseek önceki koşuda 30 araç / 19.1 dk ve 21 araç / 11.0 dk
+harcamıştı. Şimdi aynı model: 8 araç / 5.9 dk ve 7 araç / 3.7 dk.
 
 ## Doğrulama
-- **46 test paketi / 1012 kontrol** (önceki: 43/922)
-- Yeni: anı sınıflandırma 43, hafıza kirliliği uçtan uca 15,
-  olay günlüğü döndürmesi 32
-- Hafıza testi gerçek kullanıcı dosyasındaki 13 anının metniyle çalıştırıldı:
-  5 geçici işaretlendi, "salt-okunur yaklaşım" gibi kalıcı kayıtlar korundu
+- **47 test paketi / 1023 kontrol** (önceki: 46/1012)
+- Yeni: `persist-retry-test` — sahte sağlayıcı 429 döner, retry kayda yazılır,
+  başarıdan sonra temizlenir
 - typecheck ✓ · build ✓ · e2e ✓
 
 ## Bilinen sınırlar
-- Kısmi sarmalama (`cd X; powershell -Command "…"`) çözülmüyor; sistem istemi
-  bunu önlemeye çalışır.
-- Ürün adı yalnızca Windows'ta okunuyor; Linux'ta `lsusb` kullanılıyor.
-- İlerleme yönlendirmesi sezgiseldir (4 metinsiz adım); yalnızca hatırlatma
-  olduğu için zararsız.
-- Geçicilik sınıflandırması sezgiseldir; yanlış pozitif bir kalıcı anıyı
-  "doğrula" uyarısıyla işaretleyebilir (silmez).
+- Retry metni sınıflandırılmış olabilir ("Sunucu istek sınırı"); sağlayıcının
+  ham mesajı her zaman korunmaz.
+- Kısmi sarmalama (`cd X; powershell -Command "…"`) çözülmüyor.
+- Geçicilik sınıflandırması sezgiseldir.
 - Windows yayıncı imzası yok; SmartScreen uyarısı gösterebilir.
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.

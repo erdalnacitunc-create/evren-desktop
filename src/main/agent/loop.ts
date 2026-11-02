@@ -21,6 +21,7 @@ import {
 } from './eventSink'
 import { createTools } from './tools'
 import { unknownToolMessage } from './toolSuggest'
+import { persistRetryState } from '../retryState'
 import {
   progressNudgeMessage,
   shouldNudgeProgress,
@@ -400,26 +401,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
    * İşçi sürecinde çalışırken oturum deposu uzaktır; bu yüzden yazma
    * `sessions()` üzerinden gider ve hata olsa bile akışı durdurmaz.
    */
-  const persistRetry = async (retry: StoredRetry | null): Promise<void> => {
-    const sessionId = payload.sessionId
-    if (!sessionId) return
-    try {
-      const store = await (await import('../sessionRepository')).sessions()
-      const session = await store.get(sessionId)
-      if (!session) return
-      const messages = session.messages.map((message) => {
-        if (message.requestId !== requestId) return message
-        const updated = { ...message }
-        if (retry === null) delete updated.retry
-        else updated.retry = retry
-        return updated
-      })
-      await store.patch(sessionId, { messages })
-    } catch {
-      // kayıt başarısız olsa da akış devam eder
-    }
-  }
-
+  const persistRetry = (retry: StoredRetry | null): Promise<void> =>
+    persistRetryState(payload.sessionId, requestId, { retry })
   let toolCallCount = 0
   /**
    * Yürütülen araçların özeti. Adım sınırına takılınca nihai yanıt
@@ -606,6 +589,11 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         }
       })
       const result: typeof stepResult = stepResult
+
+      // Adım başarıyla tamamlandı: varsa retry yer tutucusundaki deneme
+      // bilgisi temizlenir. Aksi hâlde başarılı bir yanıttan sonra arayüz
+      // "yeniden deneniyor" uyarısını sonsuza kadar gösterirdi.
+      void persistRetry(null)
 
       if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
       log.info(

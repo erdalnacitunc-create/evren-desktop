@@ -38,6 +38,7 @@ import { asSink, type AgentEventSink } from './agent/eventSink'
 import { agentProcess } from './agent/process'
 import { createLogger } from './logger'
 import { appendSessionEvent, nextSeq } from './sessionEvents'
+import { dropEmptyPlaceholder, persistRetryState } from './retryState'
 import { streamWithContinuation } from './ai/continuation'
 
 const controllers = new Map<string, AbortController>()
@@ -183,36 +184,6 @@ export function emitChatEvent(webContentsId: number, event: ChatEvent): void {
  * yazılır. Böylece uygulama kapansa bile "3. deneme, 14:32'de" kaybolmaz.
  * `retry: null` gönderilirse alan temizlenir (deneme başarılı oldu).
  */
-async function patchAssistantRetry(
-  sessionId: string | undefined,
-  requestId: string,
-  patch: { retry?: StoredRetry | null; continuations?: number }
-): Promise<void> {
-  if (!sessionId) return
-  try {
-    const store = await sessions()
-    const session = await store.get(sessionId)
-    if (!session) return
-    if (!session.messages.some((message) => message.requestId === requestId)) return
-
-    const messages = session.messages.map((message) => {
-      if (message.requestId !== requestId) return message
-      const updated = { ...message }
-      if (patch.retry === null) {
-        delete updated.retry
-      } else if (patch.retry) {
-        updated.retry = patch.retry
-      }
-      if (patch.continuations !== undefined) {
-        updated.continuations = patch.continuations
-      }
-      return updated
-    })
-    await store.patch(sessionId, { messages })
-  } catch {
-    // kayıt başarısız olsa da akış devam eder
-  }
-}
 
 /**
  * Asistan yanıtını ana süreçte biriktirip, akış bitince oturuma kaydeder.
@@ -237,17 +208,20 @@ function createTrackingSend(
       // Akış başında yer tutucu kayıt açıldıysa onu güncelle; yeniden
       // deneme bilgisi (retry) ve sürdürme sayacı korunur.
       if (prior) {
-        const messages = existing!.messages.map((message) =>
-          message.requestId === requestId
-            ? {
-                ...message,
-                content: state.content,
-                reasoning: state.reasoning || undefined,
-                usage: state.usage,
-                finishReason
-              }
-            : message
-        )
+        const messages = existing!.messages.map((message) => {
+          if (message.requestId !== requestId) return message
+          // Başarılı turda retry bilgisi anlamını yitirir. Burada açıkça
+          // silinir: ayrı bir "temizle" yazımı `persist` ile yarışıp eski
+          // değeri geri getirebiliyordu (canlı testte gözlendi).
+          const { retry: _cleared, ...rest } = message
+          return {
+            ...rest,
+            content: state.content,
+            reasoning: state.reasoning || undefined,
+            usage: state.usage,
+            finishReason
+          }
+        })
         await store.patch(sessionId, { messages })
         return
       }
@@ -384,6 +358,8 @@ function createTrackingSend(
     const result = applyStreamEvent(state, event)
     state = result.state
     if (result.persist) void persist(result.persist.finishReason)
+    // Retry yer tutucusu açıldıysa ve akış metinsiz hata verirse temizle.
+    if (event.type === 'error') void dropEmptyPlaceholder(sessionId, requestId)
     emitChatEvent(webContentsId, event)
   }
 }
@@ -563,7 +539,7 @@ export async function streamChat(
                     : {})
                 }
               }
-              void patchAssistantRetry(payload.sessionId, requestId, { retry: retryInfo })
+              void persistRetryState(payload.sessionId, requestId, { retry: retryInfo })
               send({
                 requestId,
                 type: 'retry',
@@ -576,7 +552,7 @@ export async function streamChat(
           }
         ),
       onContinue: (event) => {
-        void patchAssistantRetry(payload.sessionId, requestId, { retry: null })
+        void persistRetryState(payload.sessionId, requestId, { retry: null })
         send({
           requestId,
           type: 'continue',
@@ -586,6 +562,8 @@ export async function streamChat(
         })
       }
     })
+    // Akış başarıyla bitti: retry yer tutucusundaki deneme bilgisi temizlenir.
+    void persistRetryState(payload.sessionId, requestId, { retry: null })
     if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
     send({ requestId, type: 'done', finishReason: result.finishReason })
   } catch (error) {

@@ -57,7 +57,12 @@ export const api = {
     notify: (title: string, body: string): Promise<Result<boolean>> =>
       window.evren.app.notify(title, body),
     logPath: (): Promise<Result<string>> => window.evren.app.logPath(),
-    openLogs: (): Promise<Result<true>> => window.evren.app.openLogs()
+    openLogs: (): Promise<Result<true>> => window.evren.app.openLogs(),
+    /**
+     * Kalıcı olay günlüğünden oturumu yeniden kurar (OpenCode session.sync).
+     */
+    syncSession: (sessionId: string): Promise<Result<unknown>> =>
+      window.evren.app.syncSession(sessionId)
   },
   subagent: {
     list: (

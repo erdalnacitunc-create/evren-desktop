@@ -1047,7 +1047,8 @@ export function Workspace({
               initialMessages={activeSession.messages.map((m) => ({
                 role: m.role,
                 content: m.content,
-                reasoning: m.reasoning
+                reasoning: m.reasoning,
+                retry: m.retry
               }))}
               workspacePath={settings.workspacePath ?? null}
               initialTodos={activeSession.todos ?? []}

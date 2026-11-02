@@ -16,6 +16,7 @@ import type {
   TodoItem,
   ToolCallInfo,
   ToolResultInfo,
+  StoredRetry,
   WorkspaceEntry
 } from '@shared/types'
 import { api, formatNumber } from '../lib/ipc'
@@ -63,6 +64,8 @@ interface UiMessage {
   content: string
   reasoning?: string
   intermediate?: boolean
+  /** Kalıcı yeniden deneme durumu (geçmişten yüklendiğinde). */
+  retry?: StoredRetry
 }
 
 type Item =
@@ -921,6 +924,42 @@ export function Chat({
     draftRef.current = { ...EMPTY_DRAFT }
     usageRef.current = null
     requestRef.current = null
+
+    // Geçmişte yarım kalmış yeniden deneme varsa bildir (OpenCode kalıcı
+    // `retry` alanıyla aynı davranış: uygulama kapansa bile görünür).
+    const lastRetry = [...initialMessages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.retry)?.retry
+    if (lastRetry && lastRetry.at > Date.now() - 10 * 60 * 1000) {
+      const remaining = Math.max(0, lastRetry.at - Date.now())
+      setNotice(
+        `${lastRetry.error.message} — yeniden deneniyor (${lastRetry.attempt})${
+          remaining > 0 ? `, ${Math.ceil(remaining / 1000)} sn` : ''
+        }`
+      )
+    }
+
+    // Kalıcı olay günlüğüyle karşılaştır: kaçırılmış olay varsa haber ver.
+    // (OpenCode `session.sync` — arayüz her an yeniden kurabilir.)
+    void api.app.syncSession(sessionId).then((result) => {
+      if (!result.ok) return
+      const projected = result.data as {
+        messages?: Array<{ role: string; content: string }>
+        skipped?: number
+        unknownTypes?: string[]
+      } | null
+      if (!projected?.messages) return
+      const projectedCount = projected.messages.length
+      const uiCount = initialMessages.length
+      if (projectedCount > uiCount + 1) {
+        setNotice(
+          `Günlükte ${projectedCount} mesaj var, arayüzde ${uiCount}. Oturumu yenilemek için sayfayı yenileyin.`
+        )
+      }
+      if ((projected.skipped ?? 0) > 0) {
+        setNotice(`Olay günlüğünde ${projected.skipped} bozuk kayıt atlandı.`)
+      }
+    })
 
     // Sekme değişip geri dönüldüyse devam eden akışı geri yükle.
     const resumed = getStreamForSession(sessionId)

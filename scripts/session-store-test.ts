@@ -76,7 +76,11 @@ app.whenReady().then(async () => {
 
   const file = join(process.env.EVREN_TEST_DATA as string, 'sessions.json')
   check('dosya oluştu', existsSync(file), true)
-  check('dosya geçerli JSON', Array.isArray(JSON.parse(readFileSync(file, 'utf8'))), true)
+  // v2 biçimi: { version, sessions } — eski düz dizi de okunur (göç).
+  const onDisk = JSON.parse(readFileSync(file, 'utf8'))
+  check('dosya geçerli JSON', typeof onDisk === 'object' && onDisk !== null, true)
+  check('sürüm alanı var', typeof onDisk.version, 'number')
+  check('oturumlar dizisi', Array.isArray(onDisk.sessions), true)
   check('geçici dosya kalmadı', existsSync(`${file}.tmp`), false)
 
   // --- yeniden adlandırma ---

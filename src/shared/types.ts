@@ -447,6 +447,30 @@ export type ChatEvent =
 
 /* ---------------- Oturumlar ---------------- */
 
+/**
+ * Kalıcı yeniden deneme durumu — OpenCode `Session.Message.Assistant.Retry`
+ * ile aynı: deneme numarası, sonraki denemenin zamanı ve hata özeti mesajın
+ * kendisinde saklanır. Böylece uygulama kapanıp açılsa bile "3. deneme,
+ * 14:32'de" bilgisi kaybolmaz ve arayüz geri sayım gösterebilir.
+ */
+export interface StoredRetry {
+  /** Kaçıncı yeniden deneme (1 tabanlı). */
+  attempt: number
+  /** Sonraki denemenin zaman damgası (ms). */
+  at: number
+  /** Hata sınıflandırması (OpenCode `Session.StructuredError`). */
+  error: StoredErrorInfo
+}
+
+/** OpenCode `Session.StructuredError` karşılığı. */
+export interface StoredErrorInfo {
+  type: string
+  message: string
+  status?: number
+  /** Sağlayıcının istediği bekleme (ms). */
+  retryAfterMs?: number
+}
+
 export interface StoredMessage {
   id: string
   role: 'user' | 'assistant'
@@ -457,6 +481,10 @@ export interface StoredMessage {
   finishReason?: string | null
   /** Ana süreçte yanıtın tekrar kaydedilmesini önlemek için. */
   requestId?: string
+  /** Devam eden yeniden deneme (varsa). */
+  retry?: StoredRetry
+  /** Kesilen yanıtın sürdürülmesi sırasında kaç tur atıldığı. */
+  continuations?: number
 }
 
 export interface Session {

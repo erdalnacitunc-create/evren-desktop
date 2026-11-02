@@ -9,6 +9,7 @@ import {
 } from 'electron'
 import { assertTrustedSender } from './ipcGuard'
 import { logFilePath } from './logger'
+import { projectStoredSession, type ProjectedSession } from './sessionEvents'
 import { appIconPath } from './appIcon'
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
@@ -1827,6 +1828,22 @@ export function registerIpcHandlers(): void {
   )
 
   registerHandler('app:getLogPath', (): Result<string> => ({ ok: true, data: logFilePath() }))
+
+  /**
+   * Kalıcı olay günlüğünden oturumu yeniden kurar (OpenCode `session.sync`).
+   * Arayüz çökmüş/kaçırılmış olayları bu çağrıyla telafi edebilir.
+   */
+  registerHandler(
+    'session:sync',
+    async (_event, sessionId: string): Promise<Result<ProjectedSession>> => {
+      try {
+        return { ok: true, data: await projectStoredSession(String(sessionId ?? '')) }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
 
   registerHandler('app:openLogs', async (): Promise<Result<true>> => {
     try {

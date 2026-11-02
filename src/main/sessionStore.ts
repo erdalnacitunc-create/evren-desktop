@@ -4,6 +4,8 @@ import { join } from 'path'
 import type { Session, SessionSummary, StoredMessage, TodoItem } from '../shared/types'
 import type { SessionRepository } from './sessionRepository'
 import { createLogger } from './logger'
+import { STORE_VERSION, migrateStore, serializeStore } from './sessionMigration'
+import { appendSessionEvent, nextSeq } from './sessionEvents'
 
 const log = createLogger('sessionStore')
 
@@ -14,20 +16,39 @@ function storeFile(): string {
   return join(app.getPath('userData'), 'sessions.json')
 }
 
+/**
+ * Diskteki dosyayı yükler ve göçten geçirir.
+ *
+ * Eski sürümler dosyayı düz dizi olarak yazıyordu; yeni biçim
+ * version + sessions nesnesidir. Göç her iki biçimi de okur, eksik alanları
+ * onarır ve bozuk kayıtları atlar (tüm dosyayı düşürmez).
+ */
 async function load(): Promise<Session[]> {
   if (cache) return cache
   try {
     const raw = await fs.readFile(storeFile(), 'utf8')
     const parsed = JSON.parse(raw) as unknown
-    cache = Array.isArray(parsed) ? (parsed as Session[]) : []
-  } catch {
+    const { store, report } = migrateStore(parsed)
+    cache = store.sessions
+    if (report.skipped > 0 || report.repaired > 0 || report.fromVersion !== STORE_VERSION) {
+      log.info(
+        `Oturum deposu göçü: v${report.fromVersion} → v${report.toVersion} · ` +
+          `${report.sessions} oturum, ${report.messages} mesaj, ` +
+          `${report.repaired} onarım, ${report.skipped} atlandı`
+      )
+      for (const note of report.notes.slice(0, 10)) log.info(`göç: ${note}`)
+      // Göç sonrası yeni biçimde geri yaz (idempotent).
+      if (report.fromVersion !== STORE_VERSION) void persist()
+    }
+  } catch (error) {
+    log.warn('Oturum dosyası okunamadı:', error)
     cache = []
   }
   return cache
 }
 
 function persist(): Promise<void> {
-  const snapshot = JSON.stringify(cache ?? [], null, 2)
+  const snapshot = serializeStore(cache ?? [])
   const target = storeFile()
   const temp = `${target}.tmp`
   writeChain = writeChain
@@ -81,6 +102,12 @@ export async function createSession(modelId: string): Promise<Session> {
   }
   sessions.push(session)
   await persist()
+  void appendSessionEvent({
+    seq: nextSeq(session.id),
+    sessionId: session.id,
+    type: 'session.created',
+    data: { modelId }
+  })
   return session
 }
 
@@ -94,6 +121,14 @@ export async function appendMessage(
 
   session.messages.push(message)
   session.updatedAt = Date.now()
+  if (message.role === 'user') {
+    void appendSessionEvent({
+      seq: nextSeq(sessionId),
+      sessionId,
+      type: 'user.message',
+      data: { content: message.content, storedId: message.id }
+    })
+  }
 
   if (session.title === 'Yeni sohbet' && message.role === 'user') {
     const title = message.content.replace(/\s+/g, ' ').trim().slice(0, 48)
@@ -149,6 +184,12 @@ export async function renameSession(sessionId: string, title: string): Promise<S
   session.title = trimmed
   session.updatedAt = Date.now()
   await persist()
+  void appendSessionEvent({
+    seq: nextSeq(sessionId),
+    sessionId,
+    type: 'session.renamed',
+    data: { title: trimmed }
+  })
   return session
 }
 

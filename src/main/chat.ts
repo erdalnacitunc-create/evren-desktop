@@ -20,7 +20,14 @@ import { sessions } from './sessionRepository'
 import { buildMemoryContext } from './memory/retrieve'
 import { streamCompletion } from './sse'
 import { buildBaseBody, toErrorEvent } from './chatShared'
-import type { AppSettings, ChatEvent, ChatMessage, ChatRequest, ChatUsage } from '../shared/types'
+import type {
+  AppSettings,
+  ChatEvent,
+  ChatMessage,
+  ChatRequest,
+  ChatUsage,
+  StoredRetry
+} from '../shared/types'
 import {
   applyStreamEvent,
   belongsToRequest,
@@ -30,6 +37,7 @@ import {
 import { asSink, type AgentEventSink } from './agent/eventSink'
 import { agentProcess } from './agent/process'
 import { createLogger } from './logger'
+import { appendSessionEvent, nextSeq } from './sessionEvents'
 import { streamWithContinuation } from './ai/continuation'
 
 const controllers = new Map<string, AbortController>()
@@ -169,6 +177,44 @@ export function emitChatEvent(webContentsId: number, event: ChatEvent): void {
 }
 
 /**
+ * Kalıcı yeniden deneme durumu — OpenCode `Session.Message.Assistant.Retry`.
+ *
+ * Asistan mesajı akış başlarken kaydedilir; yeniden deneme bilgisi o mesaja
+ * yazılır. Böylece uygulama kapansa bile "3. deneme, 14:32'de" kaybolmaz.
+ * `retry: null` gönderilirse alan temizlenir (deneme başarılı oldu).
+ */
+async function patchAssistantRetry(
+  sessionId: string | undefined,
+  requestId: string,
+  patch: { retry?: StoredRetry | null; continuations?: number }
+): Promise<void> {
+  if (!sessionId) return
+  try {
+    const store = await sessions()
+    const session = await store.get(sessionId)
+    if (!session) return
+    if (!session.messages.some((message) => message.requestId === requestId)) return
+
+    const messages = session.messages.map((message) => {
+      if (message.requestId !== requestId) return message
+      const updated = { ...message }
+      if (patch.retry === null) {
+        delete updated.retry
+      } else if (patch.retry) {
+        updated.retry = patch.retry
+      }
+      if (patch.continuations !== undefined) {
+        updated.continuations = patch.continuations
+      }
+      return updated
+    })
+    await store.patch(sessionId, { messages })
+  } catch {
+    // kayıt başarısız olsa da akış devam eder
+  }
+}
+
+/**
  * Asistan yanıtını ana süreçte biriktirip, akış bitince oturuma kaydeder.
  * Renderer sekme değiştirdiğinde veya kapandığında yanıt kaybolmaz.
  *
@@ -186,10 +232,26 @@ function createTrackingSend(
     try {
       const store = await sessions()
       const existing = await store.get(sessionId)
-      const duplicate = existing?.messages.some(
-        (message) => message.requestId === requestId
-      )
-      if (duplicate) return
+      const prior = existing?.messages.find((message) => message.requestId === requestId)
+
+      // Akış başında yer tutucu kayıt açıldıysa onu güncelle; yeniden
+      // deneme bilgisi (retry) ve sürdürme sayacı korunur.
+      if (prior) {
+        const messages = existing!.messages.map((message) =>
+          message.requestId === requestId
+            ? {
+                ...message,
+                content: state.content,
+                reasoning: state.reasoning || undefined,
+                usage: state.usage,
+                finishReason
+              }
+            : message
+        )
+        await store.patch(sessionId, { messages })
+        return
+      }
+
       await store.appendMessage(sessionId, {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -205,11 +267,120 @@ function createTrackingSend(
     }
   }
 
+  /** Günlüğe yazılacak asistan mesaj kimliği (kalıcı olay kaydı için). */
+  const assistantMessageId = `assistant-${requestId}`
+  let loggedStart = false
+
+  /** ChatEvent → kalıcı olay (OpenCode `session.*` eşlemesi). */
+  const logEvent = (event: ChatEvent): void => {
+    if (!sessionId) return
+    const seq = () => nextSeq(sessionId)
+    switch (event.type) {
+      case 'content':
+        void appendSessionEvent({
+          seq: seq(),
+          sessionId,
+          type: 'text.delta',
+          data: { messageId: assistantMessageId, text: event.text }
+        })
+        return
+      case 'reasoning':
+        void appendSessionEvent({
+          seq: seq(),
+          sessionId,
+          type: 'reasoning.delta',
+          data: { messageId: assistantMessageId, text: event.text }
+        })
+        return
+      case 'tool-call':
+        void appendSessionEvent({
+          seq: seq(),
+          sessionId,
+          type: 'tool.called',
+          data: {
+            messageId: assistantMessageId,
+            id: event.call.id,
+            name: event.call.name,
+            arguments: event.call.arguments
+          }
+        })
+        return
+      case 'tool-result':
+        void appendSessionEvent({
+          seq: seq(),
+          sessionId,
+          type: 'tool.result',
+          data: {
+            messageId: assistantMessageId,
+            toolCallId: event.result.toolCallId,
+            name: event.result.name,
+            ok: event.result.ok,
+            content: event.result.content
+          }
+        })
+        return
+      case 'retry':
+        void appendSessionEvent({
+          seq: seq(),
+          sessionId,
+          type: 'retry.scheduled',
+          data: {
+            messageId: assistantMessageId,
+            attempt: event.attempt,
+            at: Date.now() + event.delayMs,
+            error: { type: 'Retryable', message: event.reason }
+          }
+        })
+        return
+      case 'continue':
+        void appendSessionEvent({
+          seq: seq(),
+          sessionId,
+          type: 'continue.started',
+          data: {
+            messageId: assistantMessageId,
+            reason: event.reason,
+            attempt: event.attempt
+          }
+        })
+        return
+      case 'done':
+        void appendSessionEvent({
+          seq: seq(),
+          sessionId,
+          type: 'assistant.completed',
+          data: { messageId: assistantMessageId, finishReason: event.finishReason }
+        })
+        return
+      case 'error':
+        void appendSessionEvent({
+          seq: seq(),
+          sessionId,
+          type: 'assistant.failed',
+          data: { messageId: assistantMessageId, error: event.error }
+        })
+        return
+      default:
+        return
+    }
+  }
+
   return (event: ChatEvent): void => {
     if (!belongsToRequest(event, requestId)) {
       emitChatEvent(webContentsId, event)
       return
     }
+    // İlk olayda asistan mesajının başladığını günlüğe yaz.
+    if (!loggedStart && sessionId) {
+      loggedStart = true
+      void appendSessionEvent({
+        seq: nextSeq(sessionId),
+        sessionId,
+        type: 'assistant.started',
+        data: { messageId: assistantMessageId }
+      })
+    }
+    logEvent(event)
     const result = applyStreamEvent(state, event)
     state = result.state
     if (result.persist) void persist(result.persist.finishReason)
@@ -379,7 +550,20 @@ export async function streamChat(
           controller.signal,
           (delta) => send({ requestId, type: delta.kind, text: delta.text }),
           {
-            onRetry: (info) =>
+            onRetry: (info) => {
+              // Kalıcı retry durumu: uygulama kapansa bile kaybolmaz.
+              const retryInfo: StoredRetry = {
+                attempt: info.attempt,
+                at: Date.now() + info.delayMs,
+                error: {
+                  type: 'Retryable',
+                  message: info.reason,
+                  ...(info.retryAfterMs !== undefined
+                    ? { retryAfterMs: info.retryAfterMs }
+                    : {})
+                }
+              }
+              void patchAssistantRetry(payload.sessionId, requestId, { retry: retryInfo })
               send({
                 requestId,
                 type: 'retry',
@@ -388,9 +572,11 @@ export async function streamChat(
                 delayMs: info.delayMs,
                 reason: info.reason
               })
+            }
           }
         ),
-      onContinue: (event) =>
+      onContinue: (event) => {
+        void patchAssistantRetry(payload.sessionId, requestId, { retry: null })
         send({
           requestId,
           type: 'continue',
@@ -398,6 +584,7 @@ export async function streamChat(
           attempt: event.attempt,
           chars: event.soFar
         })
+      }
     })
     if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
     send({ requestId, type: 'done', finishReason: result.finishReason })

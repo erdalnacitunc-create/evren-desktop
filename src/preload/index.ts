@@ -25,6 +25,7 @@ export const api = {
     openPath: (path: string) => ipcRenderer.invoke('app:openPath', path),
     chooseDirectory: (title?: string) => ipcRenderer.invoke('app:chooseDirectory', title),
     notify: (title: string, body: string) => ipcRenderer.invoke('app:notify', title, body),
+    syncSession: (sessionId: string) => ipcRenderer.invoke('session:sync', sessionId),
     logPath: () => ipcRenderer.invoke('app:getLogPath'),
     openLogs: () => ipcRenderer.invoke('app:openLogs')
   },

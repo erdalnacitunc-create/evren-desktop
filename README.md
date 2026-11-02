@@ -188,63 +188,57 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-## 0.4.0 Beta
+## 0.4.1 Beta
 
 ### Windows x64
-- Kurulum: `release/EVREN-Desktop-Setup-0.4.0-x64.exe`
-- Portable: `release/EVREN-Desktop-0.4.0-portable-x64.zip`
+- Kurulum: `release/EVREN-Desktop-Setup-0.4.1-x64.exe`
+- Portable: `release/EVREN-Desktop-0.4.1-portable-x64.zip`
 - Ayrı beta profili: `%APPDATA%\EVREN Desktop Beta`
 
 ### Pardus / Debian x64
 - `.deb` ve AppImage: GitHub release asset
 - Ayrıntılar: `docs/PARDUS.md`
 
-### Bu sürümde: OpenCode davranış eşliği
+### Bu sürümde: kalıcı durum ve olay günlüğü
 
-Bu sürüm, çalışan bir referans uygulamanın (OpenCode 2.2.5) hata yönetimi,
-zaman aşımı ve yanıt sürdürme mimarisini birebir aktarır. Ayrıntı:
-`docs/OPENCODE-PARITY.md`.
+OpenCode'un kalan iki mimari farkı kapatıldı (`docs/OPENCODE-PARITY.md`).
 
-**Zaman aşımı artık üç katmanlı**
-- Başlıklar için **5 dakika**, parçalar arası **15 dakika**, toplam süre sınırsız
-- Önceki 60 saniyelik eşik **kaldırıldı**: DeepSeek gibi sağlayıcılar akıl
-  yürütürken dakikalarca hiçbir bayt göndermeyebilir; 60 sn meşru yanıtları
-  kesiyordu
+**Kalıcı yeniden deneme durumu**
+- Yeniden deneme bilgisi artık mesajın alanı: `retry: { attempt, at, error }`
+- Uygulama kapansa bile "3. deneme, 14:32'de" bilgisi kaybolmaz
+- Oturum açıldığında son 10 dakika içindeki deneme bildirim olarak gösterilir
+  (kalan saniye dahil)
+- Sürdürme turları `continuations` alanında sayılır
 
-**Hata sınıflandırma (11 sınıf)**
-- `RateLimit`, `ProviderInternal`, `Transport`, `InvalidProviderOutput`,
-  `UnknownProvider`, `Authentication`, `QuotaExceeded`, `ContentPolicy`,
-  `InvalidRequest`, `UnsupportedOperation`, `Timeout`
-- `x-should-retry` başlığı her şeyi ezer
-- Kota (429/402) throttle'dan ayırt edilir
+**Depo göçü (v1 → v2)**
+- `sessions.json` artık `{ version, sessions }` biçiminde
+- Eski düz dizi dosyaları **bozulmadan** yüklenir; eksik alanlar onarılır,
+  bozuk kayıtlar atlanır ve günlüğe yazılır
+- Göç idempotenttir; bir kez çalışır, sonra yeni biçim kullanılır
+- Hiçbir mesaj/oturum kaybı yok — mevcut kullanıcı verisi korunur
 
-**Retry zamanlaması**
-- 2 → 4 → 8 → 10 → 10 … saniye, **10 deneme**, jitter'lı (toplam ~84 s)
-- Zaman aşımına uğrayan deneme için ayrı kota: **3**
-- `Retry-After` 15 dakikaya kadar dikkate alınır
-
-**Kesilen yanıt artık sürdürülüyor (en önemli değişiklik)**
-- Akış ortada kesilirse metin korunur ve model **kaldığı yerden devam eder**
-- Token limitine takılırsa (`finish: length`) aynı şekilde sürdürülür
-- Arayüzde "Yanıt kesildi — kaldığı yerden sürdürülüyor" gösterilir
-- Düz sohbet, ajan, Çoklu Evren sentezi ve alt ajanlarda geçerli
-
-**Adım sınırı artık varsayılan değil**
-- OpenCode gibi: sınır yalnızca agent tanımında (`agent.steps`) verilirse uygulanır
-- Sınıra ulaşılınca `MAX_STEPS_PROMPT` gönderilir, araçlar kapanır ve model
-  yazılı özet verir; kullanıcı boş ekranla kalmaz
+**Kalıcı olay günlüğü**
+- Her olay `session-events.jsonl` dosyasına eklenir (satır başına bir olay)
+- Olaylar: `session.created`, `user.message`, `assistant.started`,
+  `text.delta`, `reasoning.delta`, `retry.scheduled`, `retry.cleared`,
+  `continue.started`, `tool.called`, `tool.result`, `step.ended`,
+  `assistant.completed`, `assistant.failed`, `session.renamed`
+- **Projeksiyon**: oturum yalnızca günlükten yeniden kurulabilir
+  (`session:sync`); sonuç depodaki mesajlarla birebir aynı
+- Bozuk satırlar tüm dosyayı düşürmez; yalnızca o satır atlanır
+- Arayüz oturum açılırken günlükle karşılaştırma yapar ve tutarsızlık varsa
+  bildirir
 
 ### Doğrulama
-- 34 test paketi / **689 kontrol**
-- 3 katmanlı zaman aşımı, 66 sınıflandırma/politika kontrolü, kesilme →
-  sürdürme (20 kontrol), gerçek 503 dizisi, paralel bekleyen istek
+- **38 test paketi / 801 kontrol**
+- Yeni: göç 32+19, olay günlüğü 40, uçtan uca 21
+- Gerçek `startChat` yolundan günlük → projeksiyon → depo eşitliği doğrulandı
 
 ### Bilinen sınırlar
-- Retry durumu kalıcı mesaj alanı değil (OpenCode'da öyle); uygulama kapanınca
-  geçmişte kalmaz
-- Olay günlüğü (durable event log) henüz yok
+- Günlük dosyası sınırsız büyür (döndürme yok); uzun vadede arşivleme gerekir
+- Arayüz şu an günlükten otomatik yeniden kurmuyor; yalnızca tutarsızlığı
+  bildiriyor (tam yeniden kurma sonraki adım)
 - Windows yayıncı imzası yok; SmartScreen uyarısı gösterebilir
-
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.
 İmzalama seçenekleri (yeniden başvuru veya ticari sertifika) ileride

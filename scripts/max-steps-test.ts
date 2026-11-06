@@ -33,12 +33,12 @@ interface ServerStats {
   requests: number
   toolRounds: number
   finalRounds: number
-  sawEmptyTools: boolean
+  sawFinalRound: boolean
 }
 
 /** Her istekte araç çağrısı döner; araç listesi boşsa metin döner. */
 function startServer(mode: 'text-after-limit' | 'empty-even-after-limit') {
-  const stats: ServerStats = { requests: 0, toolRounds: 0, finalRounds: 0, sawEmptyTools: false }
+  const stats: ServerStats = { requests: 0, toolRounds: 0, finalRounds: 0, sawFinalRound: false }
   const server = createServer((request, response) => {
     let body = ''
     request.on('data', (chunk) => {
@@ -46,14 +46,18 @@ function startServer(mode: 'text-after-limit' | 'empty-even-after-limit') {
     })
     request.on('end', () => {
       stats.requests += 1
-      const noTools = /"tools"\s*:\s*\[\s*\]/.test(body) || !/"tools"\s*:/.test(body)
-      if (noTools) {
-        stats.sawEmptyTools = true
+      // Nihai tur artık araç tanımları DOLU + `tool_choice: "none"` ile
+      // gelir: boş dizi bazı sağlayıcılarda "tools must not be an empty
+      // array" hatası veriyordu (bkz. finalize-tools-test).
+      const finalRound =
+        /"tool_choice"\s*:\s*"none"/.test(body) || /"tools"\s*:\s*\[\s*\]/.test(body)
+      if (finalRound) stats.sawFinalRound = true
+
+      // Yalnızca 'text-after-limit' modunda nihai turda metin döner.
+      if (finalRound && mode === 'text-after-limit') {
         stats.finalRounds += 1
         response.writeHead(200, { 'content-type': 'text/event-stream' })
-        if (mode === 'text-after-limit') {
-          response.write(sse({ choices: [{ delta: { content: 'NİHAİ YANIT' } }] }))
-        }
+        response.write(sse({ choices: [{ delta: { content: 'NİHAİ YANIT' } }] }))
         response.write(sse({ choices: [{ delta: {}, finish_reason: 'stop' }] }))
         response.write('data: [DONE]\n\n')
         response.end()
@@ -148,9 +152,9 @@ app.whenReady().then(async () => {
     await run(port, sink)
     server.close()
 
-    check('adım sınırında araçsız tur istendi', stats.sawEmptyTools, true)
-    // 20 araç turu + 1 sınır turu (araçlar kapalı) + 1 araçsız nihai tur
-    check('20 araç turu + sınır turu + nihai tur', stats.requests, 22)
+    check('adım sınırında nihai tur istendi', stats.sawFinalRound, true)
+    // 20 araç turu + sınır turu (tool_choice: none); metin gelince biter.
+    check('20 araç turu + sınır turu', stats.requests, 21)
     check('nihai yanıt akıtıldı', contentOf(sink.events), 'NİHAİ YANIT')
     check('tek done olayı', sink.countOf('done'), 1)
     check(

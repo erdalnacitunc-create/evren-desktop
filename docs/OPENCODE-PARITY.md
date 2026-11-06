@@ -701,3 +701,128 @@ harcamıştı. Yeni koşuda aynı model: **8 araç / 5.9 dk** ve **7 araç / 3.7
 | `persist-retry-test` | 11 | 429 → yer tutucu, kalıcı retry, başarıda temizlik |
 
 Toplam: **47 paket / 1023 kontrol**.
+
+## 21. Adım sınırı turunda `tools: []` hatası (0.4.4)
+
+### Belirti
+
+1 Kasım günlüğünde (`main.log`) şu uyarı vardı:
+
+```
+Nihai yanıt isteği başarısız (max-steps): Error: `tools` must not be an empty
+array. Either provide at least one tool or omit the field entirely.
+(parameter=tools)
+```
+
+Ardından `Nihai yanıt boş döndü (max-steps); özet metni yazılıyor` geliyordu.
+
+### Etki
+
+Adım/araç sınırına takılan bir koşuda modelin **kendi** nihai sentezi
+kayboluyor, yerine araç listesinden üretilen jenerik özet yazılıyordu
+("Adım sınırına ulaştım (20 adım)…"). Kullanıcı boş kalmıyordu ama cevabın
+kalitesi düşüyordu.
+
+### Neden görünmedi
+
+Adım sınırı 0.4.0'da varsayılan olarak **kaldırıldı** (`agent.steps`
+verilmezse sınırsız). Dolayısıyla `finalizeRun('max-steps')` artık normalde
+çağrılmıyor. Hata `agent.steps` ayarlanırsa ya da araç sınırına
+(`MAX_TOOL_CALLS`) çarpılırsa geri gelirdi.
+
+### Kök neden
+
+`finalizeRun` araçsız tur için gövdeye `tools: []` koyuyordu. OpenAI uyumlu
+sağlayıcılar boş diziyi reddediyor; alanın **hiç gönderilmemesi** veya dolu
+olması gerekiyor.
+
+### Düzeltme
+
+`src/main/agent/loop.ts` → `finalizeRun`:
+
+```ts
+const finalTools = registry.definitions()
+const body = {
+  ...buildBaseBody(payload),
+  messages: [...messages, { role: 'user', content: note }],
+  // Araç tanımları dolu gönderilir; çağrı tool_choice: 'none' ile engellenir.
+  ...(finalTools.length > 0
+    ? { tools: finalTools, tool_choice: 'none' as const }
+    : {})
+}
+```
+
+Boş dizi hiç gönderilmez; doluysa hem tanımlar hem `tool_choice: 'none'`
+gider (model şemayı görür ama çağıramaz). Bu, normal döngüdeki sınır
+turunda zaten kullanılan yaklaşımın aynısıdır.
+
+### Yan bulgu: test yanlış davranışı sabitlemişti
+
+`max-steps-test` "araçsız tur"u `tools: []` **veya** alanın yokluğu olarak
+tanımlıyordu ve 22 istek bekliyordu. Gerçek davranış artık:
+
+- sınır turunda `tool_choice: 'none'` ile tanımlar dolu gider
+- model metin yazarsa döngü biter (20 araç + 1 sınır turu = **21** istek)
+- model yine araç çağırırsa `finalizeRun` devreye girer
+
+Test bu akışa göre güncellendi; iki senaryo da (metin / yedek özet) korundu.
+
+### Doğrulama (`finalize-tools-test`, 9 kontrol)
+
+Sahte sağlayıcı boş `tools` dizisine **gerçek sağlayıcı gibi 400** döner:
+
+| Kontrol | Sonuç |
+|---|---|
+| hiçbir istekte boş `tools` dizisi yok | ✅ |
+| nihai tur tetiklendi, `tool_choice: none` | ✅ |
+| nihai turda araç tanımları dolu | ✅ |
+| modelin kendi metni geldi | ✅ |
+| yedek özete düşülmedi | ✅ |
+| bitiş nedeni `max-steps` | ✅ |
+
+## 22. Canlı doğrulama: dört model, 6 Kasım (0.4.3)
+
+Aynı USB sorgusu dört modelle çalıştırıldı. **1726 yeni olay, 0 bozuk satır,
+4/4 tamamlandı.**
+
+| Oturum | Model | Metin | Araç | Retry |
+|---|---|---|---|---|
+| `b4f0b884` | gemma-4-31b | 825 | 1 | – |
+| `e07181a3` | glm-5.3 | 1856 | 5 | 1 |
+| `24f1eff1` | deepseek-v4.1-flash | 3449 | 4 | – |
+| `4103adf7` | deepseek-v4.1-flash | 2596 | 7 | – |
+
+**17 araç sonucu, 0 başarısız.** Önceki koşularda 5-6 hata vardı.
+
+### Kalıcı retry canlıda doğrulandı (0.4.3)
+
+glm oturumu `Model şu anda dolu` (HTTP 429) aldı. Kanıt, mesajın oluşturulma
+anından gelir:
+
+| Alan | Değer |
+|---|---|
+| retry olayı | 21:49:05 |
+| asistan mesajı `createdAt` | **21:49:05** |
+| akış bitişi | 21:51:16 |
+
+Yer tutucu tam retry anında açılmış. 0.4.3 öncesi `createdAt` akış bitişi
+olurdu, yani retry bilgisi hiç yazılmazdı. Başarıdan sonra `retry` alanı
+temizlenmiş, boş asistan mesajı kalmamış.
+
+### Hafıza uyarısı çelişkileri yakalattı
+
+Donanım değişmişti: COM5 artık yok (2 port), TP-Link modem takılı değil.
+Hafızadaki eski kayıtlar `volatile` işaretli olduğu için modeller çelişkiyi
+fark edip araç sonucunu esas aldı:
+
+- deepseek: *"Eski anıdaki gibi üçüncü port (COM5) yok → güncel durumda 2 port."*
+- deepseek: *"Bu envanterde ASIX Ethernet adaptörü olarak kayıtlıydı; güncel
+  durumda Ethernet değil, ses aygıtı → eski anı geçersiz."*
+- glm: *"Önceki kayıtlardaki COM5 ve TP-Link 4G modem bu taramada görünmüyor."*
+
+17 araç çağrısının **hiçbiri** PowerShell ile sarmalanmamış.
+
+### İlerleme yönlendirmesi
+
+3 oturumda birer kez tetiklendi; her seferinde model rapora geçti ve ikinci
+(kesin) uyarı hiç gerekmedi.

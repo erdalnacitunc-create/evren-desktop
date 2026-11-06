@@ -53,6 +53,7 @@ const SUITES = [
   { file: 'scripts/session-rotation-test.ts', label: 'Olay günlüğü döndürmesi' },
   { file: 'scripts/memory-pollution-test.ts', label: 'Hafıza kirliliği uçtan uca' },
   { file: 'scripts/persist-retry-test.ts', label: 'Kalıcı retry durumu (canlı akış)' },
+  { file: 'scripts/finalize-tools-test.ts', label: 'Adım sınırı turunda tools gövdesi' },
   { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' },
   { file: 'scripts/max-steps-test.ts', label: 'Adım sınırı davranışı' },
   { file: 'scripts/continuation-test.ts', label: 'Kesilen yanıtı sürdürme' },

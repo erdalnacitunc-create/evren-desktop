@@ -465,12 +465,18 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           'Elindeki sonuçlarla nihai yanıtı yaz. Eksik kalan nokta varsa kısaca belirt.'
 
     try {
+      // Araç tanımları **dolu** gönderilir, `tool_choice: 'none'` ile
+      // çağrı engellenir. Boş dizi göndermek bazı sağlayıcılarda
+      // "`tools` must not be an empty array" hatası verir — 1 Kasım
+      // günlüğünde tam olarak bu yaşandı ve nihai yanıt isteği düştü,
+      // yerine yedek özet yazıldı.
+      const finalTools = registry.definitions()
       const body = {
         ...buildBaseBody(payload),
         messages: [...messages, { role: 'user' as const, content: note }],
-        // Araçsız tur: model yanıt yazmak zorunda kalır.
-        tools: [],
-        tool_choice: 'none' as const
+        ...(finalTools.length > 0
+          ? { tools: finalTools, tool_choice: 'none' as const }
+          : {})
       }
       const result = await streamCompletion(
         baseUrl,

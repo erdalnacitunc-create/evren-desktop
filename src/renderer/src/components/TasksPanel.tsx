@@ -8,6 +8,8 @@ interface Props {
   onCancelSubagent: (id: string) => void
   onRetrySubagent: (id: string) => void
   onClose: () => void
+  /** Sürüklenebilir panel genişliği (useResizablePanel). */
+  style?: React.CSSProperties
 }
 
 function statusLabel(status: TodoItem['status']): string {
@@ -31,14 +33,15 @@ export function TasksPanel({
   onClear,
   onCancelSubagent,
   onRetrySubagent,
-  onClose
+  onClose,
+  style
 }: Props): React.JSX.Element {
   const done = todos.filter((todo) => todo.status === 'completed').length
   const percent = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0
   const hasTasks = todos.length > 0 || subagentTasks.length > 0
 
   return (
-    <aside className="review-pane tasks-pane" aria-label="Görevler">
+    <aside className="review-pane tasks-pane" aria-label="Görevler" style={style}>
       <div className="review-head">
         <div>
           <div className="review-title">Görevler</div>

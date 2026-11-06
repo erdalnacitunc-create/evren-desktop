@@ -20,6 +20,7 @@ import type {
   WorkspaceEntry
 } from '@shared/types'
 import { api, formatNumber } from '../lib/ipc'
+import { useResizablePanel } from '../lib/useResizablePanel'
 import { estimateMultiverse, type MultiverseEstimate } from '../lib/multiverse'
 import { estimateMessagesTokens } from '../lib/tokens'
 import {
@@ -43,6 +44,7 @@ import {
 import { PERMISSION_LABELS } from '@shared/permissions'
 import { useI18n } from '../i18n'
 import { CommandPalette } from './CommandPalette'
+import { ResizeHandle } from './ResizeHandle'
 import { ReviewPane } from './ReviewPane'
 import { WorkspacePanel } from './WorkspacePanel'
 import { TasksPanel } from './TasksPanel'
@@ -81,6 +83,8 @@ interface MultiverseConfig {
 interface Props {
   model: ModelInfo
   sessionId: string
+  /** Sol sohbet listesinin genişliği (yan panel sınırı için). */
+  sidebarWidth?: number
   defaults: ChatDefaults
   agent: AgentOptions
   multiverse: MultiverseConfig
@@ -359,7 +363,7 @@ export function Chat({
   onWorkspaceChanged,
   onTodosChange,
   onSettingsChanged
-}: Props): React.JSX.Element {
+, sidebarWidth = 0}: Props): React.JSX.Element {
   const { t } = useI18n()
   const [items, setItems] = useState<Item[]>(
     initialMessages.map((message) => ({ kind: 'message', ...message }))
@@ -394,6 +398,28 @@ export function Chat({
   const [gitOpen, setGitOpen] = useState(false)
   const [workspaceTick, setWorkspaceTick] = useState(0)
   const [tasksOpen, setTasksOpen] = useState(false)
+
+  // Yan paneller ve terminal: sürükleyerek boyutlandırma + gizleme.
+  // Yan paneller birbirini kapattığı için aynı anda yalnızca biri açıktır;
+  // boyut sınırı pencere genişliğine göre hook içinde uygulanır.
+  const sideChrome = (): number => sidebarWidth + 7
+  const reviewResize = useResizablePanel('review', {
+    edge: 'end',
+    axis: 'x',
+    chrome: sideChrome
+  })
+  const workspaceResize = useResizablePanel('workspace', {
+    edge: 'end',
+    axis: 'x',
+    chrome: sideChrome
+  })
+  const tasksResize = useResizablePanel('tasks', {
+    edge: 'end',
+    axis: 'x',
+    chrome: sideChrome
+  })
+  const gitResize = useResizablePanel('git', { edge: 'end', axis: 'x', chrome: sideChrome })
+  const terminalResize = useResizablePanel('terminal', { edge: 'start', axis: 'y' })
   const [todos, setTodos] = useState<TodoItem[]>(initialTodos)
   const [subagentTasks, setSubagentTasks] = useState<SubagentTaskInfo[]>([])
   const [profile, setProfile] = useState<AgentProfile>('build')
@@ -536,6 +562,22 @@ export function Chat({
       if (result.ok) setMentionFiles(flattenWorkspaceFiles(result.data))
     })
   }, [mentionOpen, workspacePath])
+
+  /**
+   * Besteci otomatik büyüme.
+   *
+   * Tek satırla başlar; yazdıkça büyür ama 5 satırda durur (CSS `max-height`
+   * ile aynı sınır). Böylece uzun metin üstteki sohbet alanını yemez.
+   */
+  useEffect(() => {
+    const element = textareaRef.current
+    if (!element) return
+    element.style.height = 'auto'
+    // 5 satır × 20.25 px satır yüksekliği + 6 px dikey dolgu ≈ 108 px.
+    // CSS `--composer-max-height` ile aynı değer olmalı.
+    const max = 108
+    element.style.height = `${Math.min(element.scrollHeight, max)}px`
+  }, [input])
 
   const messageArtifacts = useMemo(() => {
     const map = new Map<number, Artifact[]>()
@@ -1851,8 +1893,6 @@ export function Chat({
     (item) => item.kind === 'tool' || (item.kind === 'message' && item.intermediate)
   ).length
   const hasConversation = items.length > 0 || draft.content || draft.reasoning
-  const showAgentBanner =
-    agent.enabled && profile === 'build' && agent.mode === 'auto' && !multiverse.enabled
   const showPlanBanner = agent.enabled && profile === 'plan' && !multiverse.enabled
   const doneTodos = todos.filter((todo) => todo.status === 'completed').length
   const runningSubagents = subagentTasks.filter((task) => task.status === 'running').length
@@ -1880,21 +1920,10 @@ export function Chat({
 
       {showPlanBanner && (
         <div className="agent-banner plan-banner">
-          <span>PLAN MODU — değişiklik yapılmaz; analiz, plan ve görev listesi.</span>
+          <span>Plan modu — değişiklik yapılmaz, yalnızca analiz.</span>
           {streaming && (
             <button className="btn-ghost danger" onClick={() => void stop()}>
-              Hemen durdur
-            </button>
-          )}
-        </div>
-      )}
-
-      {showAgentBanner && (
-        <div className="agent-banner">
-          <span>OTOMATİK MOD — ajan sizin yerinize eylem yapabilir.</span>
-          {streaming && (
-            <button className="btn-ghost danger" onClick={() => void stop()}>
-              Hemen durdur
+              Durdur
             </button>
           )}
         </div>
@@ -2329,7 +2358,73 @@ export function Chat({
       )}
 
       <div className="composer">
-        <div className="composer-top">
+        {mentionOpen && (
+          <div className="mention-popover">
+            <div className="mention-head">Dosya bağlamı ekle</div>
+            {mentionMatches.length === 0 ? (
+              <p className="mention-empty">Eşleşen dosya yok.</p>
+            ) : (
+              mentionMatches.map((file, index) => (
+                <button
+                  key={file.path}
+                  className={`mention-item ${index === mentionIndex ? 'active' : ''}`}
+                  onMouseDown={(event) => {
+                    event.preventDefault()
+                    selectMention(file.path)
+                  }}
+                >
+                  <span className="mention-icon">▤</span>
+                  <span className="mention-path">{file.path}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+        {(queue.length > 0 || steeringCount > 0) && (
+          <div className="composer-queue">
+            {steeringCount > 0 && (
+              <span className="queue-badge steering">
+                {t('composer.steeringPending', { count: steeringCount })}
+              </span>
+            )}
+            {queue.map((item, index) => (
+              <span className="queue-chip" key={item.id}>
+                <span className="queue-index">{index + 1}</span>
+                <span className="queue-text" title={item.text}>
+                  {item.text}
+                </span>
+                <button
+                  className="attach-remove"
+                  title={t('composer.removeFromQueue')}
+                  onClick={() =>
+                    setQueue((prev) => prev.filter((entry) => entry.id !== item.id))
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {attachments.length > 0 && (
+          <div className="composer-attachments">
+            {attachments.map((attachment) => (
+              <span className="attach-chip" key={attachment.id}>
+                <span>{attachment.kind === 'image' ? '🖼' : '📎'}</span>
+                <span className="attach-name">{attachment.name}</span>
+                <button
+                  className="attach-remove"
+                  onClick={() => removeAttachment(attachment.id)}
+                  title={t('composer.attachRemove')}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="composer-box">
+          <div className="composer-chips">
           <button
             className={`composer-mode ${profile === 'plan' ? 'active' : ''}`}
             onClick={toggleProfile}
@@ -2413,71 +2508,6 @@ export function Chat({
             </button>
           )}
         </div>
-        {mentionOpen && (
-          <div className="mention-popover">
-            <div className="mention-head">Dosya bağlamı ekle</div>
-            {mentionMatches.length === 0 ? (
-              <p className="mention-empty">Eşleşen dosya yok.</p>
-            ) : (
-              mentionMatches.map((file, index) => (
-                <button
-                  key={file.path}
-                  className={`mention-item ${index === mentionIndex ? 'active' : ''}`}
-                  onMouseDown={(event) => {
-                    event.preventDefault()
-                    selectMention(file.path)
-                  }}
-                >
-                  <span className="mention-icon">▤</span>
-                  <span className="mention-path">{file.path}</span>
-                </button>
-              ))
-            )}
-          </div>
-        )}
-        {(queue.length > 0 || steeringCount > 0) && (
-          <div className="composer-queue">
-            {steeringCount > 0 && (
-              <span className="queue-badge steering">
-                {t('composer.steeringPending', { count: steeringCount })}
-              </span>
-            )}
-            {queue.map((item, index) => (
-              <span className="queue-chip" key={item.id}>
-                <span className="queue-index">{index + 1}</span>
-                <span className="queue-text" title={item.text}>
-                  {item.text}
-                </span>
-                <button
-                  className="attach-remove"
-                  title={t('composer.removeFromQueue')}
-                  onClick={() =>
-                    setQueue((prev) => prev.filter((entry) => entry.id !== item.id))
-                  }
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {attachments.length > 0 && (
-          <div className="composer-attachments">
-            {attachments.map((attachment) => (
-              <span className="attach-chip" key={attachment.id}>
-                <span>{attachment.kind === 'image' ? '🖼' : '📎'}</span>
-                <span className="attach-name">{attachment.name}</span>
-                <button
-                  className="attach-remove"
-                  onClick={() => removeAttachment(attachment.id)}
-                  title={t('composer.attachRemove')}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
         <textarea
           ref={textareaRef}
           value={input}
@@ -2510,7 +2540,7 @@ export function Chat({
                     ? t('composer.placeholder.multiverse')
                     : t('composer.placeholder')
           }
-          rows={3}
+          rows={1}
         />
         <div className="composer-actions">
           <span className="meta">
@@ -2572,56 +2602,100 @@ export function Chat({
               </button>
             </div>
           ) : (
-            <button className="btn" onClick={() => void send()} disabled={!input.trim()}>
-              {t('composer.send')}
+            <button className="btn btn-send" onClick={() => void send()} disabled={!input.trim()}>
+              <span className="btn-send-label">{t('composer.send')}</span>
+              <span className="btn-send-icon" aria-hidden="true">
+                ↑
+              </span>
             </button>
           )}
+          </div>
         </div>
       </div>
         {terminalOpen && (
-          <TerminalPanel
-            workspacePath={workspacePath}
-            onClose={() => setTerminalOpen(false)}
-          />
+          <>
+            <ResizeHandle
+              {...terminalResize.handleProps}
+              label="Terminali yeniden boyutlandır"
+              orientation="horizontal"
+            />
+            <TerminalPanel
+              workspacePath={workspacePath}
+              style={terminalResize.style}
+              onClose={() => setTerminalOpen(false)}
+            />
+          </>
         )}
         </div>
 
         {reviewOpen && reviewArtifact && (
-          <ReviewPane
-            artifact={reviewArtifact}
-            onClose={() => setReviewOpen(false)}
-          />
+          <>
+            <ResizeHandle
+              {...reviewResize.handleProps}
+              label="İnceleme panelini yeniden boyutlandır"
+              orientation="vertical"
+            />
+            <ReviewPane
+              artifact={reviewArtifact}
+              style={reviewResize.style}
+              onClose={() => setReviewOpen(false)}
+            />
+          </>
         )}
 
         {workspaceOpen && (
-          <WorkspacePanel
-            workspacePath={workspacePath}
-            refreshKey={workspaceTick}
-            onChoose={onChooseWorkspace}
-            onClose={() => setWorkspaceOpen(false)}
-            onChanged={onWorkspaceChanged}
-          />
+          <>
+            <ResizeHandle
+              {...workspaceResize.handleProps}
+              label="Dosyalar panelini yeniden boyutlandır"
+              orientation="vertical"
+            />
+            <WorkspacePanel
+              workspacePath={workspacePath}
+              refreshKey={workspaceTick}
+              onChoose={onChooseWorkspace}
+              onClose={() => setWorkspaceOpen(false)}
+              onChanged={onWorkspaceChanged}
+              style={workspaceResize.style}
+            />
+          </>
         )}
 
         {tasksOpen && (
-          <TasksPanel
-            todos={todos}
-            subagentTasks={subagentTasks}
-            onToggle={toggleTodo}
-            onClear={clearTodos}
-            onCancelSubagent={cancelSubagent}
-            onRetrySubagent={retrySubagent}
-            onClose={() => setTasksOpen(false)}
-          />
+          <>
+            <ResizeHandle
+              {...tasksResize.handleProps}
+              label="Görevler panelini yeniden boyutlandır"
+              orientation="vertical"
+            />
+            <TasksPanel
+              todos={todos}
+              subagentTasks={subagentTasks}
+              onToggle={toggleTodo}
+              onClear={clearTodos}
+              onCancelSubagent={cancelSubagent}
+              onRetrySubagent={retrySubagent}
+              onClose={() => setTasksOpen(false)}
+              style={tasksResize.style}
+            />
+          </>
         )}
 
         {gitOpen && (
-          <GitPanel
-            workspacePath={workspacePath}
-            refreshKey={workspaceTick}
-            onClose={() => setGitOpen(false)}
-            onChanged={onWorkspaceChanged}
-          />
+          <>
+            <ResizeHandle
+              {...gitResize.handleProps}
+              label="Git panelini yeniden boyutlandır"
+              orientation="vertical"
+            />
+            <GitPanel
+              workspacePath={workspacePath}
+              refreshKey={workspaceTick}
+              onClose={() => setGitOpen(false)}
+              onChanged={onWorkspaceChanged}
+              style={gitResize.style}
+            />
+          </>
         )}
       </div>
 

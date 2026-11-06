@@ -19,6 +19,8 @@ interface Props {
   onChoose: () => void
   onClose: () => void
   onChanged: () => void
+  /** Sürüklenebilir panel genişliği (useResizablePanel). */
+  style?: React.CSSProperties
 }
 
 function basename(value: string): string {
@@ -98,7 +100,8 @@ export function WorkspacePanel({
   refreshKey,
   onChoose,
   onClose,
-  onChanged
+  onChanged,
+  style
 }: Props): React.JSX.Element {
   const [tab, setTab] = useState<'files' | 'changes' | 'checks' | 'map' | 'search'>('files')
   const [tree, setTree] = useState<WorkspaceEntry[]>([])
@@ -286,7 +289,7 @@ export function WorkspacePanel({
   }, [tree])
 
   return (
-    <aside className="review-pane workspace-pane">
+    <aside className="review-pane workspace-pane" style={style}>
       <div className="review-head">
         <div>
           <div className="review-title">Çalışma Alanı</div>

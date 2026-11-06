@@ -7,6 +7,8 @@ import { formatBytes, type Artifact } from '../lib/artifacts'
 interface Props {
   artifact: Artifact
   onClose: () => void
+  /** Sürüklenebilir panel genişliği (useResizablePanel). */
+  style?: React.CSSProperties
 }
 
 type PreviewKind = 'markdown' | 'html' | 'mermaid' | 'table' | 'svg' | 'pdf' | 'none'
@@ -157,7 +159,7 @@ function MermaidPreview({ content }: { content: string }): React.JSX.Element {
   return <div className="mermaid-preview" dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
-export function ReviewPane({ artifact, onClose }: Props): React.JSX.Element {
+export function ReviewPane({ artifact, onClose, style }: Props): React.JSX.Element {
   const [toast, setToast] = useState<string | null>(null)
   const previewKind = previewKindFor(artifact)
   const [view, setView] = useState<'preview' | 'source'>(
@@ -203,7 +205,7 @@ export function ReviewPane({ artifact, onClose }: Props): React.JSX.Element {
   const previewable = previewKind !== 'none'
 
   return (
-    <aside className="review-pane">
+    <aside className="review-pane" style={style}>
       <div className="review-head">
         <div className="review-head-info">
           <strong>{artifact.title}</strong>

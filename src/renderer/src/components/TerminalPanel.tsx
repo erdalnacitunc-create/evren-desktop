@@ -9,6 +9,8 @@ import { useI18n } from '../i18n'
 interface Props {
   workspacePath: string | null
   onClose: () => void
+  /** Sürüklenebilir panel yüksekliği (useResizablePanel). */
+  style?: React.CSSProperties
 }
 
 const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]/g
@@ -41,7 +43,7 @@ const XTERM_THEME = {
 }
 
 /** Gerçek PTY oturumu — xterm.js yüzeyi. */
-function PtyTerminal({ workspacePath, onClose }: Props): React.JSX.Element {
+function PtyTerminal({ workspacePath, onClose, style }: Props): React.JSX.Element {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -124,7 +126,7 @@ function PtyTerminal({ workspacePath, onClose }: Props): React.JSX.Element {
   }, [])
 
   return (
-    <div className="terminal-panel">
+    <div className="terminal-panel" style={style}>
       <div className="terminal-head">
         <div className="terminal-title">
           <span className={`terminal-dot ${status?.running ? 'on' : ''}`} />
@@ -166,7 +168,7 @@ function PtyTerminal({ workspacePath, onClose }: Props): React.JSX.Element {
 }
 
 /** PTY yüklenemezse kullanılan boru tabanlı yedek yüzey. */
-function PipeTerminal({ workspacePath, onClose }: Props): React.JSX.Element {
+function PipeTerminal({ workspacePath, onClose, style }: Props): React.JSX.Element {
   const { t } = useI18n()
   const [output, setOutput] = useState('')
   const [input, setInput] = useState('')
@@ -251,7 +253,7 @@ function PipeTerminal({ workspacePath, onClose }: Props): React.JSX.Element {
   }
 
   return (
-    <div className="terminal-panel">
+    <div className="terminal-panel" style={style}>
       <div className="terminal-head">
         <div className="terminal-title">
           <span className={`terminal-dot ${status?.running ? 'on' : ''}`} />
@@ -299,6 +301,7 @@ function PipeTerminal({ workspacePath, onClose }: Props): React.JSX.Element {
 }
 
 export function TerminalPanel(props: Props): React.JSX.Element {
+  const style = props.style
   const { t } = useI18n()
   const [mode, setMode] = useState<'pty' | 'pipe' | null>(null)
 
@@ -316,7 +319,7 @@ export function TerminalPanel(props: Props): React.JSX.Element {
 
   if (mode === null) {
     return (
-      <div className="terminal-panel">
+      <div className="terminal-panel" style={style}>
         <div className="terminal-head">
           <div className="terminal-title">
             <span className="terminal-dot" />

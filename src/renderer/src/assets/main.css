@@ -2559,9 +2559,17 @@ input {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   padding: 6px 2px;
   position: relative;
+  /* Dar kolonda düğmeler taşmasın (yan panel açıkken ölçüldü): alt satıra
+     kayar, böylece hiçbiri komşu panelin altında kalmaz. */
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.chat-statusbar > * {
+  flex: 0 0 auto;
 }
 
 .task-anchor {
@@ -6568,4 +6576,418 @@ summary:focus-visible,
 ::-webkit-scrollbar-thumb:hover {
   background: #2c4a7a;
   background-clip: content-box;
+}
+
+/* =========================================================================
+   Arayüz dokunuşları (v0.4.5)
+   -------------------------------------------------------------------------
+   Tasarım referansları: shadcn/ui "Prompt Input + InputGroup" (gönder butonu
+   kutunun içinde, ekler üstte, komutlar altta), ChatGPT/Claude sohbet kolonu
+   (okunabilir maksimum genişlik), VS Code/Zed panel ayırıcıları (görünmez
+   geniş tutamak, üzerine gelince ince vurgu, çift tıkla sıfırla).
+   ========================================================================= */
+
+:root {
+  /* Sohbet kolonunun maksimum genişliği: geniş ekranda satırlar uzayıp
+     okunaksız olmasın. */
+  --chat-max-width: 920px;
+  /* Besteci: 5 satır × satır yüksekliği (13.5px × 1.5) + dikey dolgu. */
+  --composer-max-height: 108px;
+}
+
+/* ---------- sürüklenebilir panel tutamağı ---------- */
+.resize-handle {
+  flex: 0 0 7px;
+  position: relative;
+  background: transparent;
+  z-index: 6;
+  outline: none;
+  touch-action: none;
+}
+
+.resize-handle-vertical {
+  width: 7px;
+  cursor: col-resize;
+}
+
+.resize-handle-horizontal {
+  width: 100%;
+  height: 7px;
+  flex: 0 0 7px;
+  cursor: row-resize;
+}
+
+/* Görünen çizgi: ince ve sakin; hover/sürüklemede vurgulanır. */
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 0.12s ease, width 0.12s ease, height 0.12s ease;
+}
+
+.resize-handle-vertical::after {
+  width: 1px;
+  height: 100%;
+}
+
+.resize-handle-horizontal::after {
+  width: 100%;
+  height: 1px;
+}
+
+.resize-handle:hover::after,
+.resize-handle.dragging::after,
+.resize-handle:focus-visible::after {
+  background: var(--accent);
+}
+
+.resize-handle-vertical:hover::after,
+.resize-handle-vertical.dragging::after,
+.resize-handle-vertical:focus-visible::after {
+  width: 2px;
+}
+
+.resize-handle-horizontal:hover::after,
+.resize-handle-horizontal.dragging::after,
+.resize-handle-horizontal:focus-visible::after {
+  height: 2px;
+}
+
+/* Sürükleme sırasında metin seçimi ve imleç tüm pencerede sabitlensin. */
+body.panel-resizing {
+  user-select: none;
+}
+
+body.panel-resizing * {
+  cursor: inherit !important;
+}
+
+/* Tutamak çizgiyi kendisi çizdiği için panellerin kendi kenarlıkları kalkar:
+   aksi hâlde çift çizgi görünür. */
+.sessions-sidebar {
+  border-right: none;
+}
+
+.review-pane {
+  border-left: none;
+}
+
+.terminal-panel {
+  border-top: none;
+}
+
+/* ---------- sohbet kolonu: ölçülü genişlik ---------- */
+/* Genişlik sınırı YALNIZCA sohbet içeriğine uygulanır. `.chat` kabı tam
+   genişlik kalır çünkü yan paneller onun içinde render ediliyor; kaba sınır
+   koymak panel genişliklerini ve tutamak konumlarını bozuyordu. */
+.chat-toolbar,
+.chat-main > .chat-scroll,
+.chat-main > .composer {
+  width: 100%;
+  max-width: var(--chat-max-width);
+  margin-inline: auto;
+}
+
+.chat-toolbar {
+  gap: 8px;
+  padding: 8px 0;
+  /* Dar kolonda düğmeler taşmasın: alt satıra kayar. */
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+/* Taşma yerine kaydırma: çok dar pencerede bile düğmeler erişilebilir kalır. */
+.chat-toolbar > * {
+  flex: 0 0 auto;
+}
+
+.chat-toolbar .toolbar-spacer {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* ---------- sohbet listesi başlığı ---------- */
+.sidebar-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-collapse,
+.restore-sidebar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: #8ea0bd;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.btn-collapse:hover,
+.restore-sidebar:hover {
+  color: var(--text);
+  background: #14213a;
+  border-color: var(--border);
+}
+
+.restore-sidebar {
+  width: 30px;
+  height: 30px;
+  border-color: var(--border);
+}
+
+/* ---------- ajan modu: otomatik mod kırmızı ---------- */
+.agent-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.75;
+  flex: 0 0 auto;
+}
+
+.agent-mode-btn.mode-auto {
+  color: #fecaca;
+  background: rgba(220, 38, 38, 0.13);
+  border-color: rgba(239, 68, 68, 0.42);
+}
+
+.agent-mode-btn.mode-auto:hover {
+  color: #ffffff;
+  background: rgba(220, 38, 38, 0.24);
+  border-color: rgba(239, 68, 68, 0.72);
+}
+
+.agent-mode-btn.mode-auto .agent-mode-dot {
+  opacity: 1;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16);
+  animation: agent-dot-pulse 2.4s ease-in-out infinite;
+}
+
+.agent-mode-btn.mode-ask {
+  color: #9fb4d6;
+}
+
+@keyframes agent-dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(239, 68, 68, 0.06);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-mode-btn.mode-auto .agent-mode-dot {
+    animation: none;
+  }
+}
+
+/* Plan şeridi: eski tam genişlik kırmızı blok yerine ince bilgi satırı. */
+.agent-banner.plan-banner {
+  margin: 6px auto 0;
+  width: 100%;
+  max-width: var(--chat-max-width);
+  padding: 5px 10px;
+  font-size: 11px;
+  color: #fcd34d;
+  background: rgba(120, 80, 10, 0.18);
+  border: 1px solid rgba(180, 120, 20, 0.35);
+  border-radius: 8px;
+}
+
+/* ---------- besteci: kutunun içinde gönder ---------- */
+.composer {
+  padding: 10px 0 14px;
+  border-top: none;
+}
+
+.composer-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'input input'
+    'chips actions';
+  align-items: end;
+  column-gap: 8px;
+  row-gap: 2px;
+  padding: 8px 8px 6px;
+  background: #0a1222;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.composer-box:focus-within {
+  border-color: #3560a0;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+/* Textarea kutunun içinde kenarlıksız; tek satırdan 5 satıra büyür. */
+.composer-box > textarea {
+  grid-area: input;
+  width: 100%;
+  resize: none;
+  border: none;
+  background: transparent;
+  padding: 3px 5px;
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.5;
+  outline: none;
+  min-height: 22px;
+  max-height: var(--composer-max-height);
+  overflow-y: auto;
+}
+
+.composer-box > textarea:focus {
+  border: none;
+  box-shadow: none;
+}
+
+.composer-box > textarea:disabled {
+  opacity: 0.6;
+}
+
+.composer-chips {
+  grid-area: chips;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.composer-chips::-webkit-scrollbar {
+  display: none;
+}
+
+/* Kutunun içindeki küçük düğmeler: dolgu ve yükseklik küçültüldü. */
+.composer-chips .composer-mode {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 7px;
+  white-space: nowrap;
+}
+
+.composer-chips .composer-mode-hint {
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.composer-chips .composer-apply {
+  padding: 3px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.composer-actions {
+  grid-area: actions;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.composer-actions .meta {
+  font-size: 10.5px;
+  color: #6b7d99;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Gönder: kutu içinde, hap biçiminde, ikon + etiket. */
+.btn-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.btn-send-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.btn-send:disabled {
+  opacity: 0.45;
+}
+
+.composer-running .btn {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+/* Dar pencerede etiket gizlenir, yalnızca ikon kalır. */
+@media (max-width: 720px) {
+  .btn-send-label {
+    display: none;
+  }
+
+  .btn-send {
+    padding: 6px 10px;
+  }
+
+  .composer-actions .meta {
+    max-width: 140px;
+  }
+}
+
+/* ---------- açık tema ---------- */
+[data-theme='light'] .composer-box {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.14);
+}
+
+[data-theme='light'] .agent-mode-btn.mode-auto {
+  color: #b91c1c;
+  background: rgba(220, 38, 38, 0.08);
+  border-color: rgba(220, 38, 38, 0.3);
+}
+
+[data-theme='light'] .agent-mode-btn.mode-auto:hover {
+  color: #7f1d1d;
+  background: rgba(220, 38, 38, 0.14);
+}
+
+[data-theme='light'] .agent-banner.plan-banner {
+  color: #92400e;
+  background: rgba(251, 191, 36, 0.16);
+  border-color: rgba(180, 120, 20, 0.3);
+}
+
+[data-theme='light'] .btn-collapse:hover,
+[data-theme='light'] .restore-sidebar:hover {
+  background: rgba(15, 23, 42, 0.06);
 }

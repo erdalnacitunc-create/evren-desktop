@@ -13,6 +13,8 @@ import {
 } from '@shared/types'
 import { api, formatContext, formatNumber } from '../lib/ipc'
 import { listActiveSessions } from '../lib/chatStream'
+import { useResizablePanel } from '../lib/useResizablePanel'
+import { ResizeHandle } from './ResizeHandle'
 import { AgentPanel } from './AgentPanel'
 import { Chat } from './Chat'
 import { EvrenLogo } from './EvrenLogo'
@@ -90,6 +92,10 @@ export function Workspace({
   }, [models])
 
   const defaultModelId = chatModels[0]?.id ?? models[0]?.id ?? ''
+
+  // Sohbet listesi: sürükleyerek boyutlandırılabilir, gizlenebilir ve
+  // tercih oturumlar arasında korunur.
+  const sessionsPanel = useResizablePanel('sessions', { edge: 'start', axis: 'x' })
 
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [query, setQuery] = useState('')
@@ -819,13 +825,24 @@ export function Workspace({
       </header>
 
       <div className="workspace-body">
-        <aside className="sidebar sessions-sidebar">
-          <div className="sidebar-head">
-            <h2>Sohbetler</h2>
-            <button className="btn-new" onClick={() => void newSession()} title="Yeni sohbet">
-              +
-            </button>
-          </div>
+        {!sessionsPanel.collapsed && (
+          <aside className="sidebar sessions-sidebar" style={sessionsPanel.style}>
+            <div className="sidebar-head">
+              <h2>Sohbetler</h2>
+              <div className="sidebar-head-actions">
+                <button className="btn-new" onClick={() => void newSession()} title="Yeni sohbet">
+                  +
+                </button>
+                <button
+                  className="btn-collapse"
+                  onClick={sessionsPanel.toggleCollapsed}
+                  title="Sohbet listesini gizle"
+                  aria-label="Sohbet listesini gizle"
+                >
+                  ‹
+                </button>
+              </div>
+            </div>
 
           <input
             className="search"
@@ -891,9 +908,28 @@ export function Workspace({
             {sessions.length === 0 && <p className="muted session-empty">Sohbet bulunamadı.</p>}
           </div>
         </aside>
+        )}
+
+        {!sessionsPanel.collapsed && (
+          <ResizeHandle
+            {...sessionsPanel.handleProps}
+            label="Sohbet listesini yeniden boyutlandır"
+            orientation="vertical"
+          />
+        )}
 
         <main className="content">
           <div className="chat-toolbar">
+            {sessionsPanel.collapsed && (
+              <button
+                className="btn-ghost restore-sidebar"
+                onClick={sessionsPanel.toggleCollapsed}
+                title="Sohbet listesini göster"
+                aria-label="Sohbet listesini göster"
+              >
+                ›
+              </button>
+            )}
             <select
               className="model-select"
               value={activeSession?.modelId ?? ''}
@@ -980,9 +1016,18 @@ export function Workspace({
 
                 <div className="params-anchor">
                   <button
-                    className={`btn-ghost ${agentPanelOpen ? 'active' : ''}`}
+                    className={`btn-ghost agent-mode-btn ${
+                      agentPanelOpen ? 'active' : ''
+                    } ${agentOptions.mode === 'auto' ? 'mode-auto' : 'mode-ask'}`}
                     onClick={() => setAgentPanelOpen((open) => !open)}
+                    title={
+                      agentOptions.mode === 'auto'
+                        ? 'Otomatik mod: ajan sizin yerinize eylem yapabilir. Değiştirmek için tıklayın.'
+                        : 'Onaylı mod: tehlikeli eylemler için izin istenir. Değiştirmek için tıklayın.'
+                    }
+                    aria-pressed={agentOptions.mode === 'auto'}
                   >
+                    <span className="agent-mode-dot" aria-hidden="true" />
                     {agentOptions.mode === 'auto' ? 'Oto' : 'Onaylı'}
                   </button>
                   {agentPanelOpen && (
@@ -1028,6 +1073,7 @@ export function Workspace({
 
           {activeModel && activeSession ? (
             <Chat
+              sidebarWidth={sessionsPanel.collapsed ? 0 : sessionsPanel.size}
               model={activeModel}
               sessionId={activeSession.id}
               defaults={settings}

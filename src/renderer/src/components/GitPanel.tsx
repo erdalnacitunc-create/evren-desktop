@@ -15,6 +15,8 @@ interface Props {
   refreshKey: number
   onClose: () => void
   onChanged: () => void
+  /** Sürüklenebilir panel genişliği (useResizablePanel). */
+  style?: React.CSSProperties
 }
 
 function statusLabel(file: GitFile): string {
@@ -37,7 +39,8 @@ export function GitPanel({
   workspacePath,
   refreshKey,
   onClose,
-  onChanged
+  onChanged,
+  style
 }: Props): React.JSX.Element {
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([])
@@ -313,7 +316,7 @@ export function GitPanel({
     !!workspacePath && path.toLowerCase() === workspacePath.toLowerCase()
 
   return (
-    <aside className="review-pane git-pane">
+    <aside className="review-pane git-pane" style={style}>
       <div className="review-head">
         <div>
           <div className="review-title">Git</div>

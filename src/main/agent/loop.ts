@@ -23,6 +23,12 @@ import { createTools } from './tools'
 import { unknownToolMessage } from './toolSuggest'
 import { createSubagentGate, limitMessage } from './subagentLimit'
 import {
+  emptyExplorationState,
+  explorationHintMessage,
+  shouldHintExploration,
+  updateExploration
+} from './explorationHint'
+import {
   buildSkillCatalog,
   buildSkillHint,
   routeSkills
@@ -448,14 +454,22 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   // Devretme kuralları. Canlı koşularda alt ajan **hiç** kullanılmıyordu
   // (15 oturumda 0 çağrı): model "kendim yaparım" diyordu. Anthropic'in
   // "scale effort to query complexity" ilkesi açık kurallara çevrildi.
+  //
+  // Kritik ayrım: **listeleme ≠ okuma**. Canlı koşuda model 40 dosyayı
+  // listeledi, yapıyı dosya adı+boyutundan çıkardı ve raporunda 4 kez
+  // "içeriği okunmadı — doğrulanamadı" yazdı. Oysa tam o noktada paralel
+  // `explore` alt ajanları gerçek değer üretirdi.
   const delegationSection =
     '\n\nALT AJAN KULLANIMI (spawn_agent):' +
-    '\n- Çok dosyalı keşif ("nerede tanımlı", "hangi modüller etkilenir", "tüm çağrı yerleri") → ' +
-    '2-4 `explore` alt ajanı **paralel** (background=true); her birine farklı ve dar bir alan ver.' +
+    '\n- Dosya ADI/BOYUTU yeterliyse (yapı çıkarma, hangi dil, kaç modül) → doğrudan ' +
+    'list_files/glob/run_command kullan, **devretme**.' +
+    '\n- İÇERİK doğrulaması gerekiyorsa ve dosya sayısı 5\'ten fazlaysa (sır taraması, ' +
+    'protokol alanları, gerçek bağımlılıklar, "tüm çağrı yerleri", fonksiyon davranışı) → ' +
+    '2-4 `explore` alt ajanı **paralel** (background=true); her birine farklı dosya grubu ver.' +
     '\n- Kod incelemesi veya risk taraması → `review` alt ajanı.' +
     '\n- Bağımsız, çok adımlı uygulama işi → `general` alt ajanı.' +
     '\n- Tek dosya, tek komut veya zaten bildiğin bir yerde arama → **devretme**, doğrudan yap.' +
-    '\n- Görev metni kendi kendine yetsin: hedef + aranacak alan/dosya kalıbı + beklenen çıktı biçimi. ' +
+    '\n- Görev metni kendi kendine yetsin: hedef + okunacak dosya/dizin + beklenen çıktı biçimi. ' +
     '"Şuna bak" gibi belirsiz görev verme; alt ajanlar aynı işi tekrarlar.' +
     '\n- Aynı görevi iki kez başlatma. Sınır: aynı anda en fazla ' +
     String(MAX_CONCURRENT_SUBAGENTS) +
@@ -622,6 +636,9 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     /** İlerlemesiz döngü koruması için adım gözlemleri. */
     const stepHistory: StepObservation[] = []
     let nudgesSent = 0
+    /** Keşif ipucu durumu: listeleme/okuma oranı. */
+    let exploration = emptyExplorationState()
+    let explorationHintsSent = 0
 
     for (let step = 0; ; step++) {
       if (controller.signal.aborted) {
@@ -851,6 +868,13 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           messages.push({ role: 'tool', tool_call_id: call.id, content: execution.content })
           executedTools.push({ name: call.name, ok: execution.ok })
 
+          // Keşif gözlemi: "listeledin ama okumadın" durumunu izler.
+          exploration = updateExploration(exploration, {
+            toolName: call.name,
+            ok: execution.ok,
+            content: execution.content
+          })
+
           if (execution.imageDataUrl) {
             messages.push({
               role: 'user',
@@ -887,6 +911,17 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             `yönlendirme #${nudgesSent} gönderildi`
         )
       }
+      // Keşif ipucu: çok dosya listelenip içerik okunmadıysa modele
+      // paralel alt ajan önerilir. Zorlama değil, tek seferlik hatırlatma.
+      if (shouldHintExploration(exploration, explorationHintsSent)) {
+        explorationHintsSent += 1
+        messages.push({ role: 'user', content: explorationHintMessage() })
+        log.warn(
+          `Keşif ipucu: ${exploration.listedFiles} dosya listelendi, ` +
+            `${exploration.readFiles} okundu — alt ajan önerildi`
+        )
+      }
+
     }
 
     // Buraya yalnızca araç sınırında düşülür; adım sınırı artık döngü içinde

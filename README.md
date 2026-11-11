@@ -188,127 +188,125 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-# 0.4.6 Beta — ajan katmanı: limit, devretme, skill kataloğu
+# 0.4.7 Beta — alt ajanlar fiilen tetikleniyor
 
-Hibrit mimarinin ilk üç aşaması. Çoklu Evren'e **dokunulmadı** (ayrı konuşma).
+0.4.6'da altyapı hazırdı ama model alt ajan **kullanmıyordu** (sizin iki
+sınamanızda da 0 tetikleme). Bu sürüm nedeni bulup düzeltiyor.
 
-## 1. Alt ajan limiti: 6 + 6
+## Teşhis: altyapı sağlamdı, tetikleyici yoktu
 
-0.4.5'e kadar alt ajan sayısı **sınırsızdı**. Model `spawn_agent`'ı kaç kez
-çağırırsa o kadar koşu başlıyordu.
-
-| Sınır | Değer | Davranış |
-|---|---|---|
-| Eşzamanlı | **6** | Kapasite dolunca yeni istek **kuyruğa** girer (FIFO) |
-| İstek başına toplam | **6** | Aşılırsa **reddedilir** (bütçe, kuyruk değil) |
-| Kuyruk zaman aşımı | 5 dk | Aşılırsa slot bütçeden geri verilir |
-| Derinlik | 1 | Alt ajan alt ajan açamaz |
-
-**Kuyruk ile bütçe neden ayrı:** bütçe aşımı modelin planlama hatasıdır
-(sonsuz fan-out); kuyruk yalnızca zamanlama sorunudur. İkisini aynı şekilde
-reddetmek, meşru paralel işi de cezalandırırdı.
-
-Reddedilen istek modele açıklamayla döner:
+0.4.6 paketinde doğruladım:
 
 ```
-İstek başına alt ajan bütçesi doldu. (kullanılan: 6/6, etkin: 2/6)
-Elindeki sonuçlarla devam et; yeni alt ajan açma.
+araç sayısı: 28 · spawn_agent: true · tool_choice: auto
+sistem istemi: delegation bölümü ✅ · "en fazla 6" ✅
 ```
 
-Yani model yeniden denemez, elindekiyle sentez yapar.
+Yani kod doğruydu. İki gerçek sınamanızda modelin düşünme metninde "alt ajan",
+"spawn", "paralel" **hiç geçmedi** — düşünüp vazgeçmedi, hiç aklına gelmedi.
 
-### Yinelenen görev koruması
+### Asıl kusur: model listeledi, okumadı
 
-Aynı görev iki kez başlatılamaz. Ancak düz metin benzerliği **yetmedi**:
-modeller görevleri şablonla yazıyor ("X ile ilgili tüm dosyaları bul…"),
-yalnızca `X` değişiyor. Düz Jaccard bunları %70+ benzer görüp reddediyordu —
-canlı testte 8 istekten yalnızca **1** alt ajan çalıştı.
+"wifi klima klasörü … program yapısını incele" sınamasında model 4
+`Get-ChildItem -Recurse` ile 40+ dosyayı **listeledi**, mimariyi dosya adı ve
+boyutundan çıkardı ve raporunda **4 kez** şunu yazdı:
 
-Çözüm **IDF ağırlıklı benzerlik**: şablon sözcükleri ("ilgili", "dosyaları",
-"listele") düşük ağırlık alır, ayırt edici sözcük ("faturalama", "arama")
-yüksek. Böylece şablon ortaklığı benzerliği şişirmez, gerçek tekrar yakalanır.
+> "Bu dosyaların içeriği okunmadı — doğrulanamadı."
 
-## 2. Alt ajanlar seçili modelde ve fiilen devrede
+Tam o noktada paralel `explore` alt ajanları gerçek değer üretirdi. Eski kural
+"çok dosyalı keşif → 2-4 explore" diyordu; model bunu "dosyaları listele"
+diye okudu.
 
-- Alt ajanlar **seçili model** üzerinden koşar (`payload.model`). Ayrı model
-  seçimi yoktur; kullanıcı modeli değiştirirse alt ajanlar da değişir.
-  Bu bir testle sabitlendi.
-- **Asıl sorun kullanımdı:** 15 oturumda `spawn_agent` çağrısı **0**. Sistem
-  istemi "karmaşık işleri devret" diyordu ama ne zaman/nasıl olduğunu
-  söylemiyordu.
+## Düzeltme 1: kuralı keskinleştir (listeleme ≠ okuma)
 
-Sistem istemine açık devretme kuralları eklendi (Anthropic'in *"scale effort to
-query complexity"* ilkesi):
-
-| Durum | Kural |
+| Durum | Davranış |
 |---|---|
-| Çok dosyalı keşif ("nerede tanımlı", "tüm çağrı yerleri") | 2-4 `explore`, **paralel** |
-| Kod incelemesi / risk taraması | `review` |
-| Bağımsız çok adımlı uygulama | `general` |
-| Tek dosya / tek komut / bilinen yer | **devretme** |
-| Görev metni | hedef + dosya kalıbı + beklenen çıktı (belirsiz görev yasak) |
+| Dosya **adı/boyutu** yeterli (yapı, dil, modül sayısı) | doğrudan `list_files`/`glob`, **devretme** |
+| **İçerik** doğrulaması + 5'ten fazla dosya (sır, protokol, bağımlılık, "tüm çağrı yerleri") | 2-4 `explore` **paralel** |
 
-Ayrıca: "alt ajan sonucu bir **gözlem**dir; çelişki varsa aracı kendin
-doğrula" — Cognition'ın örtük karar riskine karşı.
+## Düzeltme 2: deterministik keşif ipucu
 
-## 3. Skill kataloğu ve yönlendirici
+Modelin aklına gelmesini beklemek yetmiyor. Döngü artık durumu **gözlemliyor**
+(`src/main/agent/explorationHint.ts`):
 
-Önce: tüm skill'lerin ad + açıklaması sistem istemine yazılıyor, üstelik
-`skill` aracının açıklaması **aynı adları ikinci kez** tekrarlıyordu.
+- Araç sonuçlarındaki dosya yollarını sayar
+- `list_files`/`glob`/`grep` ve `Get-ChildItem` çıktısı = **listeleme**
+- `read_file`/`repo_map`/`code_search` ve `Get-Content` = **okuma**
+- ≥10 dosya listelenip okunan oran %20'nin altındaysa modele **tek seferlik**
+  hatırlatma gider
 
-Şimdi:
+`progressGuard` ile aynı desen: **hatırlatma, zorlama değil**. Araç
+engellenmez; görev yalnızca yapı sorusuysa model ipucunu yok sayabilir
+(metinde bu açıkça yazıyor).
 
-| Katman | İçerik | Bütçe |
-|---|---|---|
-| Katalog (bağlamda) | ad + kısa açıklama + "ne zaman" | 6 000 token |
-| Gövde (istek üzerine) | tam talimat | 4 000 token, aşılırsa kırpılır + not |
+Log kanıtı (gerçek koşu):
 
-- Bütçe aşılırsa katalog kesilir ve modele **kaç becerinin listelenmediği**
-  söylenir (sessiz kesme yok).
-- **Yönlendirici**: görev metnine göre en uygun **3** skill işaretlenir
-  ("bu göreve uygun"). Gövde yine otomatik yüklenmez; model `skill` aracıyla
-  karar verir.
-- Türkçe normalizasyon (büyük/küçük harf, `ı/ş/ğ/ü/ö/ç`) ve basit gövde kesme.
-- Alt ajanlar da artık katalog alıyor (önceden hiç skill bilgisi yoktu).
-- `skill` aracı gövdeyi 4 000 token'da kırpar; kırpıldığını modele söyler.
+```
+(agent/loop) Keşif ipucu: 16 dosya listelendi, 0 okundu — alt ajan önerildi
+```
 
-**Bulunan hata:** yönlendirici `usb`, `git`, `ipc` gibi **kısa ama kritik**
-terimleri uzunluk filtresine takıp atıyordu → "usb aygıtlarını incele" sorgusu
-0 sonuç döndürüyordu. Eşik 2 karaktere indirildi, yalnızca gerçek dolgu
-sözcükleri (ve, ile, bir, için…) eleniyor.
+## Canlı doğrulama: gerçek model, gerçek görev
 
-## Doğrulama
+24 dosyalık yapay bir ESP firmware projesi + gömülü sırlar üretildi; görev
+**içerik** okumayı gerektiriyordu ("gömülü sırları dosya:satır ile listele").
+
+**Sonuç: 4 paralel `explore` alt ajanı çalıştı.**
+
+```
+süre: 190 sn
+araç dağılımı: glob 1 · spawn_agent 4 · task_wait 4 · read_file 1
+subagent-task olayı: 8 (4 başladı + 4 bitti)
+sır bulundu: EVET
+```
+
+Modelin ürettiği görevler — her biri **farklı dosya grubu**, kendi kendine
+yeten talimat:
+
+```
+explore: "firmware/ag.h, api.h, ayarlar.h, durum_coz.h dosyalarını TAM içeriklerini oku…"
+explore: "firmware/haier_kare.h, kok_sertifika.h, kumanda.h, led.h …"
+explore: "firmware/main.h, mqtt.h, mqtt_tani.h, ota.h …"
+explore: "firmware/sensor.h, tls_olc.h, web.h, zamanlayici.h …"
+```
+
+Bu, mimarinin hedeflediği davranışın birebir kendisi: **işi böl, paralel oku,
+sonuçları topla, sentezle.**
+
+## Test kapsamı
 
 | Paket | Kontrol | Kapsam |
 |---|---|---|
-| `agent-subagent-limit-test` | 42 | Kuyruk, bütçe, iptal, zaman aşımı, FIFO, reset |
-| `agent-skill-catalog-test` | 46 | Bütçe, vurgulama, puanlama, Türkçe, kırpma |
-| `agent-subagent-e2e-test` | 11 | Gerçek döngü: 8 spawn → 6 çalışır, 2 reddedilir |
-| `agent-topology-test` | 54 | Şablonlu ama farklı görevler artık reddedilmiyor |
+| `agent-exploration-hint-test` | 48 | Yol sayımı, listeleme/okuma ayrımı, oran eşiği, ipucu metni |
+| `agent-spawn-trigger-test` | 13 | Uçtan uca: listele → ipucu → spawn → sonuç; ve doğrudan spawn |
+| `agent-live-spawn-test` | 2 | Gerçek model, gerçek proje, gerçek sırlar (elle çalıştırılır) |
 
-Toplam: **53 paket / 1224 kontrol** (önceki: 50/1125). typecheck ✓ build ✓ e2e ✓
+Toplam: **55 paket / 1285 kontrol** (önceki: 53/1224). typecheck ✓ build ✓ e2e ✓
 
-## Bilinçli olarak yapılmayanlar
+`agent-live-spawn-test` bilinçli olarak `test:unit` içinde **değil**: gerçek
+sağlayıcıya istek atar ve token harcar.
 
-- **Çoklu Evren entegrasyonu** — sizin isteğinizle sonraya bırakıldı.
-  `planTopology()` hazır ama döngüye bağlanmadı.
-- **Otomatik skill taslağı** — onay akışı ve karantina ile birlikte, sonraki
-  aşama.
-- **Triage'ın döngüye bağlanması** — önce alt ajan kullanımının gerçek
-  verisini görmek gerekiyor.
-
-## Sıradaki adım (ölçüm)
-
-0.4.6'yı kurup birkaç çok dosyalı sorgu çalıştırın. Loglarda şunları
-görmelisiniz:
-
-```text
-(agent/loop) Alt ajan reddedildi: … bütçesi doldu
-(agent/loop) Skill kataloğu bütçeye kısıldı: N dahil, M dışarıda
+```bash
+node scripts/run-unit.cjs scripts/agent-live-spawn-test.ts
 ```
 
-Ve olay günlüğünde ilk kez `spawn_agent` çağrıları. Bu veri gelmeden triage
-eşiklerini kalibre etmek anlamsız.
+## Yan bulgu: test altyapısında şifre çözme tuzağı
+
+Canlı test ilk denemede "API anahtarı yok" dedi. Neden: Chromium, `safeStorage`
+anahtarını `Local State` dosyasında DPAPI ile sarılı tutuyor. Yalnızca
+`credentials.bin` kopyalamak yetmiyor; `Local State` de gerekli. Bu, test
+altyapısı için belgelendi.
+
+## Sıradaki
+
+Artık ölçülebilir bir davranış var. Bir sonraki adım **gerçek iş
+yükünüzde** bunun ne sıklıkta ve ne kadar faydalı olduğunu görmek:
+
+- `session-events.jsonl` içinde `spawn_agent` sayısı
+- Alt ajan sonuçlarının nihai cevaba katkısı
+- Süre/token maliyeti (alt ajan ~4× token)
+
+Bu veri gelince 4. aşamaya (triage: hangi sorgu hangi mod) geçebiliriz.
+Çoklu Evren entegrasyonu hâlâ sizin belirlediğiniz sırada bekliyor.
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.
 İmzalama seçenekleri (yeniden başvuru veya ticari sertifika) ileride

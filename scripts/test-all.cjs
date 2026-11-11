@@ -59,6 +59,8 @@ const SUITES = [
   { file: 'scripts/agent-subagent-limit-test.ts', label: 'Alt ajan limiti ve kuyruğu', fast: true },
   { file: 'scripts/agent-skill-catalog-test.ts', label: 'Skill kataloğu ve yönlendirici', fast: true },
   { file: 'scripts/agent-subagent-e2e-test.ts', label: 'Alt ajan limiti uçtan uca' },
+  { file: 'scripts/agent-exploration-hint-test.ts', label: 'Keşif ipucu (listele≠oku)', fast: true },
+  { file: 'scripts/agent-spawn-trigger-test.ts', label: 'Alt ajan tetikleme (uçtan uca)' },
   { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' },
   { file: 'scripts/max-steps-test.ts', label: 'Adım sınırı davranışı' },
   { file: 'scripts/continuation-test.ts', label: 'Kesilen yanıtı sürdürme' },

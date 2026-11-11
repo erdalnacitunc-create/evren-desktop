@@ -55,6 +55,7 @@ const SUITES = [
   { file: 'scripts/persist-retry-test.ts', label: 'Kalıcı retry durumu (canlı akış)' },
   { file: 'scripts/finalize-tools-test.ts', label: 'Adım sınırı turunda tools gövdesi' },
   { file: 'scripts/panel-layout-test.ts', label: 'Panel yerleşimi (saf)', fast: true },
+  { file: 'scripts/agent-topology-test.ts', label: 'Hibrit ajan topolojisi (triage)', fast: true },
   { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' },
   { file: 'scripts/max-steps-test.ts', label: 'Adım sınırı davranışı' },
   { file: 'scripts/continuation-test.ts', label: 'Kesilen yanıtı sürdürme' },

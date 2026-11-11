@@ -197,10 +197,38 @@ const base: TopologyInput = {
     true
   )
   check(
+    'birebir tekrar',
+    isDuplicateTask('git commit at', ['git commit at']),
+    true
+  )
+  check(
     'farklı iş tekrar sayılmaz',
     isDuplicateTask('usb cihazlarını listele', ['git durumunu göster']),
     false
   )
+
+  // Şablon ortaklığı tekrar sayılmamalı: yalnızca konu farklı.
+  const template = (area: string): string =>
+    `${area} ile ilgili tüm dosyaları bul, her birinde tanımlı dışa aktarılan fonksiyonları listele`
+  const existing = [
+    template('kimlik doğrulama ve oturum yönetimi'),
+    template('faturalama ve ödeme akışı'),
+    template('arama indeksi ve sorgu katmanı'),
+    template('dosya yükleme ve depolama'),
+    template('bildirim ve e-posta kuyruğu'),
+    template('raporlama ve dışa aktarma')
+  ]
+  check(
+    'şablonlu ama farklı görev kabul edilir',
+    isDuplicateTask(template('eşitleme ve çakışma çözümü'), existing),
+    false
+  )
+  check(
+    'şablonlu birebir tekrar reddedilir',
+    isDuplicateTask(template('faturalama ve ödeme akışı'), existing),
+    true
+  )
+  check('boş mevcut liste', isDuplicateTask('usb tara', []), false)
   check('eşik sabiti', DUPLICATE_TASK_SIMILARITY, 0.7)
   check('boş metin', taskSimilarity('', 'abc'), 0)
 }

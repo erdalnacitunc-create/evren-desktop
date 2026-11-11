@@ -15,6 +15,7 @@ import type {
 import { approvalKey, waitForApproval } from './approval'
 import { createTools } from './tools'
 import { unknownToolMessage } from './toolSuggest'
+import { buildSkillCatalog, buildSkillHint, routeSkills } from './skillCatalog'
 
 export type SubagentType = 'explore' | 'review' | 'general'
 
@@ -88,8 +89,22 @@ export async function runSubagent(options: SubagentOptions): Promise<{
     readOnly
   })
 
+  // Alt ajana da skill kataloğu verilir; gövde yüklemez, yalnızca göreve
+  // uygun olanları işaretler. Alt ajan "beceri var" bilgisiyle çalışır ama
+  // bağlamı şişirmez.
+  const routedForCatalog = routeSkills(skills, prompt)
+  const skillCatalog = buildSkillCatalog(skills, {
+    highlighted: routedForCatalog.map((skill) => skill.id)
+  })
+
   const messages: ChatMessage[] = [
-    { role: 'system', content: agentInstruction(agentType, prompt, workspaceRoot) },
+    {
+      role: 'system',
+      content:
+        agentInstruction(agentType, prompt, workspaceRoot) +
+        skillCatalog.text +
+        buildSkillHint(routedForCatalog)
+    },
     { role: 'user', content: prompt }
   ]
   const request: ChatRequest = { model, messages }

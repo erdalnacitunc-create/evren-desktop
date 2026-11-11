@@ -188,107 +188,127 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-# 0.4.5 Beta — arayüz yenilemesi
+# 0.4.6 Beta — ajan katmanı: limit, devretme, skill kataloğu
 
-Beş kozmetik/UX iyileştirmesi. Mantık değişmedi; yalnızca yerleşim ve
-etkileşim.
+Hibrit mimarinin ilk üç aşaması. Çoklu Evren'e **dokunulmadı** (ayrı konuşma).
 
-## 1. Sürüklenebilir ve gizlenebilir paneller
+## 1. Alt ajan limiti: 6 + 6
 
-Sohbet listesi, inceleme, dosyalar, görevler, git ve terminal artık
-**tutamaktan sürüklenerek boyutlandırılıyor** ve gizlenebiliyor.
+0.4.5'e kadar alt ajan sayısı **sınırsızdı**. Model `spawn_agent`'ı kaç kez
+çağırırsa o kadar koşu başlıyordu.
 
-| Panel | Varsayılan | Aralık |
+| Sınır | Değer | Davranış |
 |---|---|---|
-| Sohbet listesi | 290 px | 180–520 |
-| İnceleme | 440 px | 280–900 |
-| Dosyalar | 480 px | 280–900 |
-| Görevler | 360 px | 240–720 |
-| Git | 480 px | 280–900 |
-| Terminal (yükseklik) | 260 px | 140–640 |
+| Eşzamanlı | **6** | Kapasite dolunca yeni istek **kuyruğa** girer (FIFO) |
+| İstek başına toplam | **6** | Aşılırsa **reddedilir** (bütçe, kuyruk değil) |
+| Kuyruk zaman aşımı | 5 dk | Aşılırsa slot bütçeden geri verilir |
+| Derinlik | 1 | Alt ajan alt ajan açamaz |
 
-- **Çift tık** varsayılana döndürür; **Home** tuşu da aynısını yapar.
-- **Ok tuşları** ±16 px, **Shift+Ok** ±64 px.
-- Boyut ve gizleme durumu `localStorage`'da saklanır; uygulama yeniden
-  açılınca hatırlanır.
-- Sohbet listesi `‹` düğmesiyle gizlenir; gizliyken araç çubuğunda `›`
-  düğmesi görünür.
-- **Sohbet kolonuna her zaman en az 420 px** kalır. Bu sınır olmadan iki
-  panel birlikte genişleyince düğmeler komşu panelin altına giriyor ve
-  tıklanamıyordu (canlı testte yakalandı).
+**Kuyruk ile bütçe neden ayrı:** bütçe aşımı modelin planlama hatasıdır
+(sonsuz fan-out); kuyruk yalnızca zamanlama sorunudur. İkisini aynı şekilde
+reddetmek, meşru paralel işi de cezalandırırdı.
 
-Tasarım referansı: VS Code/Zed panel ayırıcıları — görünmez 7 px tutamak,
-üzerine gelince vurgu, çift tıkla sıfırla.
+Reddedilen istek modele açıklamayla döner:
 
-## 2. Otomatik mod şeridi kaldırıldı, "Oto" düğmesi kırmızı
+```
+İstek başına alt ajan bütçesi doldu. (kullanılan: 6/6, etkin: 2/6)
+Elindeki sonuçlarla devam et; yeni alt ajan açma.
+```
 
-Eski hâlde ekranın enini kaplayan kırmızı bir şerit vardı. Kaldırıldı;
-otomatik mod artık **düğmenin kendisinde** görünüyor:
+Yani model yeniden denemez, elindekiyle sentez yapar.
 
-- Kırmızı zemin, kırmızı kenarlık, yanıp sönen nokta.
-- `Onaylı` modda nötr gri kalır.
-- Plan modu şeridi de inceltildi (tam genişlik blok yerine ince bilgi satırı).
+### Yinelenen görev koruması
 
-Bu, durumu göstermek için ayrı bir satır harcamaz — başlık alanında zaten
-bir düğme vardı.
+Aynı görev iki kez başlatılamaz. Ancak düz metin benzerliği **yetmedi**:
+modeller görevleri şablonla yazıyor ("X ile ilgili tüm dosyaları bul…"),
+yalnızca `X` değişiyor. Düz Jaccard bunları %70+ benzer görüp reddediyordu —
+canlı testte 8 istekten yalnızca **1** alt ajan çalıştı.
 
-## 3. Sohbet alanı daha ölçülü
+Çözüm **IDF ağırlıklı benzerlik**: şablon sözcükleri ("ilgili", "dosyaları",
+"listele") düşük ağırlık alır, ayırt edici sözcük ("faturalama", "arama")
+yüksek. Böylece şablon ortaklığı benzerliği şişirmez, gerçek tekrar yakalanır.
 
-Sohbet kolonu **en fazla 920 px** genişliğinde ve ortalanır. Geniş ekranda
-satırlar 1500 px'e yayılıp okunaksız olmuyor (ChatGPT/Claude ile aynı
-aralık: ~95 karakter).
+## 2. Alt ajanlar seçili modelde ve fiilen devrede
 
-Önemli ayrıntı: sınır yalnızca **sohbet içeriğine** uygulanır, `.chat`
-kabına değil — yan paneller o kabın içinde render edildiği için kabı
-sınırlamak panel genişliklerini ve tutamak konumlarını bozuyordu.
+- Alt ajanlar **seçili model** üzerinden koşar (`payload.model`). Ayrı model
+  seçimi yoktur; kullanıcı modeli değiştirirse alt ajanlar da değişir.
+  Bu bir testle sabitlendi.
+- **Asıl sorun kullanımdı:** 15 oturumda `spawn_agent` çağrısı **0**. Sistem
+  istemi "karmaşık işleri devret" diyordu ama ne zaman/nasıl olduğunu
+  söylemiyordu.
 
-## 4. Besteci: tek satırdan büyür, 5 satırda durur
+Sistem istemine açık devretme kuralları eklendi (Anthropic'in *"scale effort to
+query complexity"* ilkesi):
 
-- Başlangıç **tek satır** (22 px).
-- Yazdıkça büyür; **5 satırda (108 px)** durur ve kaydırma başlar.
-- Böylece uzun mesaj yazarken sohbet geçmişi yukarıdan itilmiyor.
+| Durum | Kural |
+|---|---|
+| Çok dosyalı keşif ("nerede tanımlı", "tüm çağrı yerleri") | 2-4 `explore`, **paralel** |
+| Kod incelemesi / risk taraması | `review` |
+| Bağımsız çok adımlı uygulama | `general` |
+| Tek dosya / tek komut / bilinen yer | **devretme** |
+| Görev metni | hedef + dosya kalıbı + beklenen çıktı (belirsiz görev yasak) |
 
-Tasarım referansı: shadcn/ui `PromptInput` ve modern sohbet arayüzlerinin
-otomatik büyüyen metin alanı.
+Ayrıca: "alt ajan sonucu bir **gözlem**dir; çelişki varsa aracı kendin
+doğrula" — Cognition'ın örtük karar riskine karşı.
 
-## 5. Gönder düğmesi kutunun içinde
+## 3. Skill kataloğu ve yönlendirici
 
-Tek bir çerçeve: metin alanı üstte, düğmeler altta, gönder sağ altta
-**hap biçiminde** (``Gönder ↑``). Kenarlık yalnızca dış kutuda; odaklanınca
-tek bir vurgu halkası.
+Önce: tüm skill'lerin ad + açıklaması sistem istemine yazılıyor, üstelik
+`skill` aracının açıklaması **aynı adları ikinci kez** tekrarlıyordu.
 
-- Dar pencerede etiket gizlenir, yalnızca `↑` ikonu kalır.
-- `Build`, `@ Dosya`, `📎 Ekle`, `🎙 Ses` düğmeleri kutunun alt satırında,
-  küçültülmüş ve gerektiğinde yatay kaydırılıyor.
+Şimdi:
+
+| Katman | İçerik | Bütçe |
+|---|---|---|
+| Katalog (bağlamda) | ad + kısa açıklama + "ne zaman" | 6 000 token |
+| Gövde (istek üzerine) | tam talimat | 4 000 token, aşılırsa kırpılır + not |
+
+- Bütçe aşılırsa katalog kesilir ve modele **kaç becerinin listelenmediği**
+  söylenir (sessiz kesme yok).
+- **Yönlendirici**: görev metnine göre en uygun **3** skill işaretlenir
+  ("bu göreve uygun"). Gövde yine otomatik yüklenmez; model `skill` aracıyla
+  karar verir.
+- Türkçe normalizasyon (büyük/küçük harf, `ı/ş/ğ/ü/ö/ç`) ve basit gövde kesme.
+- Alt ajanlar da artık katalog alıyor (önceden hiç skill bilgisi yoktu).
+- `skill` aracı gövdeyi 4 000 token'da kırpar; kırpıldığını modele söyler.
+
+**Bulunan hata:** yönlendirici `usb`, `git`, `ipc` gibi **kısa ama kritik**
+terimleri uzunluk filtresine takıp atıyordu → "usb aygıtlarını incele" sorgusu
+0 sonuç döndürüyordu. Eşik 2 karaktere indirildi, yalnızca gerçek dolgu
+sözcükleri (ve, ile, bir, için…) eleniyor.
 
 ## Doğrulama
 
-- **49 test paketi / 1071 kontrol** (önceki: 48/1032)
-- Yeni: `panel-layout-test` — 39 kontrol (sınırlar, sürükleme yönü,
-  klavye, pencere payı, spec tutarlılığı)
-- `ui-resize-test.cjs` — gerçek Electron penceresinde 13 kontrol:
-  sürükleme, alt sınır, kalıcılık (yeniden açılış), gizleme kalıcılığı,
-  yan panel, terminal tutamağı, klavye, sohbet payı
-- typecheck ✓ · build ✓ · e2e ✓
-- Koyu ve açık tema ekran görüntüleriyle doğrulandı
+| Paket | Kontrol | Kapsam |
+|---|---|---|
+| `agent-subagent-limit-test` | 42 | Kuyruk, bütçe, iptal, zaman aşımı, FIFO, reset |
+| `agent-skill-catalog-test` | 46 | Bütçe, vurgulama, puanlama, Türkçe, kırpma |
+| `agent-subagent-e2e-test` | 11 | Gerçek döngü: 8 spawn → 6 çalışır, 2 reddedilir |
+| `agent-topology-test` | 54 | Şablonlu ama farklı görevler artık reddedilmiyor |
 
-## Test sırasında bulunan ve düzeltilen gerçek kusurlar
+Toplam: **53 paket / 1224 kontrol** (önceki: 50/1125). typecheck ✓ build ✓ e2e ✓
 
-1. **Panel sürüklemesi tepkisizdi.** React sentetik olayları + pointer
-   capture kombinasyonu hızlı hareketlerde olay kaybediyordu. `document`
-   üzerinde global `pointermove`/`pointerup` dinleyicilerine geçildi.
-2. **Tutamaç klavye odağı almıyordu.** `pointerdown` içindeki
-   `preventDefault` odağı engelliyordu; kaldırıldı.
-3. **Sınır iki kez uygulanıyordu** (%85 çarpanı + sohbet payı), panel
-   maksimumda kilitlenip sürüklemeye tepki vermiyordu.
-4. **Araç çubuğu dar kolonda taşıyordu** — düğmeler komşu panelin altında
-   kalıp tıklanamıyordu. `flex-wrap` eklendi.
+## Bilinçli olarak yapılmayanlar
 
-## Bilinen sınırlar
-- Panel genişlikleri piksel cinsinden saklanır; farklı DPI/ölçekte yeniden
-  sınırlanır (taşma olmaz, yalnızca varsayılana yaklaşabilir).
-- Yan paneller birbirini kapatır (tek panel açık), bu davranış korundu.
-- Windows yayıncı imzası yok; SmartScreen uyarısı gösterebilir.
+- **Çoklu Evren entegrasyonu** — sizin isteğinizle sonraya bırakıldı.
+  `planTopology()` hazır ama döngüye bağlanmadı.
+- **Otomatik skill taslağı** — onay akışı ve karantina ile birlikte, sonraki
+  aşama.
+- **Triage'ın döngüye bağlanması** — önce alt ajan kullanımının gerçek
+  verisini görmek gerekiyor.
+
+## Sıradaki adım (ölçüm)
+
+0.4.6'yı kurup birkaç çok dosyalı sorgu çalıştırın. Loglarda şunları
+görmelisiniz:
+
+```text
+(agent/loop) Alt ajan reddedildi: … bütçesi doldu
+(agent/loop) Skill kataloğu bütçeye kısıldı: N dahil, M dışarıda
+```
+
+Ve olay günlüğünde ilk kez `spawn_agent` çağrıları. Bu veri gelmeden triage
+eşiklerini kalibre etmek anlamsız.
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.
 İmzalama seçenekleri (yeniden başvuru veya ticari sertifika) ileride

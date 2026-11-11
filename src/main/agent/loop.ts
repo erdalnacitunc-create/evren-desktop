@@ -21,6 +21,17 @@ import {
 } from './eventSink'
 import { createTools } from './tools'
 import { unknownToolMessage } from './toolSuggest'
+import { createSubagentGate, limitMessage } from './subagentLimit'
+import {
+  buildSkillCatalog,
+  buildSkillHint,
+  routeSkills
+} from './skillCatalog'
+import {
+  MAX_CONCURRENT_SUBAGENTS,
+  MAX_SUBAGENTS_PER_REQUEST,
+  isDuplicateTask
+} from '../../shared/agentTopology'
 import { persistRetryState } from '../retryState'
 import {
   progressNudgeMessage,
@@ -74,6 +85,29 @@ interface AgentRunOptions {
 }
 
 const log = createLogger('agent/loop')
+
+/**
+ * Son kullanıcı mesajının metni.
+ *
+ * Skill yönlendiricisi ve triage bu metne bakar; araç sonuçları veya asistan
+ * mesajları görev niyetini yansıtmaz.
+ */
+function lastUserTextOf(messages: Array<{ role: string; content: unknown }>): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (!message || message.role !== 'user') continue
+    const content = message.content
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) {
+      return content
+        .filter((part) => part && typeof part === 'object' && (part as { type?: string }).type === 'text')
+        .map((part) => (part as { text?: string }).text ?? '')
+        .join('\n')
+    }
+    return ''
+  }
+  return ''
+}
 
 /**
  * Adım/araç sınırları.
@@ -203,6 +237,12 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         ? await ensureAgentWorkspace(payload.sessionId)
         : null
 
+  // Alt ajan kapısı: eşzamanlılık + istek başına bütçe.
+  // 0.4.5'e kadar sınırsızdı; model kaç kez çağırırsa o kadar koşu açılıyordu.
+  const subagentGate = createSubagentGate()
+  /** Bu istekte açılan alt ajan görevleri (yinelenen işi engellemek için). */
+  const spawnedPrompts: string[] = []
+
   const executeSubagent = (
     agentType: 'explore' | 'review' | 'general',
     prompt: string,
@@ -212,6 +252,9 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       parentRequestId: requestId,
       baseUrl,
       apiKey,
+      // Alt ajanlar **seçili model** üzerinden çalışır. Kullanıcı modeli
+      // değiştirirse alt ajanlar da o modelle koşar; ayrı bir model seçimi
+      // yoktur (bkz. docs/HYBRID-AGENT-ARCHITECTURE.md §6).
       model: payload.model,
       agentType,
       prompt,
@@ -231,11 +274,39 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       prompt: string,
       background: boolean
     ) => {
-      if (!background) {
-        const result = await executeSubagent(agentType, prompt, controller)
+      // Aynı işi iki kez açmayı engelle. Canlı koşularda modeller bazen
+      // neredeyse aynı görevi iki kez başlatıyordu; bu hem token hem süre
+      // kaybı. Benzerlik eşiği `DUPLICATE_TASK_SIMILARITY`.
+      if (isDuplicateTask(prompt, spawnedPrompts)) {
+        log.warn(`Yinelenen alt ajan isteği reddedildi: ${prompt.slice(0, 80)}`)
         return {
-          ok: result.ok,
-          content: `Alt ajan (${agentType}) sonucu:\n\n${result.content}`
+          ok: false,
+          content:
+            'Bu görev zaten başlatıldı; aynı işi ikinci kez açmak yerine ' +
+            'mevcut sonucu `task_wait`/`task_status` ile al veya görevi daralt.'
+        }
+      }
+      spawnedPrompts.push(prompt)
+
+      // Bütçe ve eşzamanlılık kapısı. Reddedilirse modele net bir açıklama
+      // döner: yeniden denemek yerine elindekiyle devam etmeli.
+      try {
+        await subagentGate.acquire(requestId, controller.signal)
+      } catch (error) {
+        const content = limitMessage(error, subagentGate.snapshot(), requestId)
+        log.warn(`Alt ajan reddedildi: ${content}`)
+        return { ok: false, content }
+      }
+
+      if (!background) {
+        try {
+          const result = await executeSubagent(agentType, prompt, controller)
+          return {
+            ok: result.ok,
+            content: `Alt ajan (${agentType}) sonucu:\n\n${result.content}`
+          }
+        } finally {
+          subagentGate.release(requestId)
         }
       }
 
@@ -284,6 +355,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         })
         .finally(() => {
           controller.signal.removeEventListener('abort', onParentAbort)
+          subagentGate.release(requestId)
         })
 
       return {
@@ -342,12 +414,18 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   })
 
   const messages: ChatMessage[] = [...payload.messages]
-  const skillSection =
-    skills.length > 0
-      ? `\n\nKullanılabilir beceriler:\n${skills
-          .map((skill) => `- ${skill.name} [${skill.id}]: ${skill.description ?? ''}`)
-          .join('\n')}\nBir becerinin talimatlarını yüklemek için "skill" aracını kullan.`
-      : ''
+  // Skill kataloğu: tüm gövdeler yerine ad + kısa açıklama, bütçeyle sınırlı.
+  // Görev metnine göre en uygun 3 skill işaretlenir (gövde yine istek üzerine).
+  const routedSkills = routeSkills(skills, lastUserTextOf(messages))
+  const skillCatalog = buildSkillCatalog(skills, {
+    highlighted: routedSkills.map((skill) => skill.id)
+  })
+  const skillSection = skillCatalog.text + buildSkillHint(routedSkills)
+  if (skillCatalog.omitted > 0) {
+    log.info(
+      `Skill kataloğu bütçeye kısıldı: ${skillCatalog.included} dahil, ${skillCatalog.omitted} dışarıda`
+    )
+  }
   const workspaceSection = workspaceRoot
     ? `\n\nÇalışma alanı: ${workspaceRoot}\n` +
       'Dosya oluşturmak, okumak, düzenlemek, silmek ve komut çalıştırmak için ' +
@@ -366,6 +444,26 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     '\n\nGörev takibi için todo_write aracını kullan. Kullanıcıya kısa bir özet ver; gereksiz uzun açıklamalardan kaçın.' +
     '\nKarmaşık araştırma/inceleme işlerini spawn_agent ile explore veya review alt ajanına devret; bağımsız çok adımlı işler için general kullan. ' +
     'Uzun sürecek veya paralel yürüyecek işlerde background=true kullan; sonucu task_wait/task_status ile al, task_list ile durumu gör.'
+
+  // Devretme kuralları. Canlı koşularda alt ajan **hiç** kullanılmıyordu
+  // (15 oturumda 0 çağrı): model "kendim yaparım" diyordu. Anthropic'in
+  // "scale effort to query complexity" ilkesi açık kurallara çevrildi.
+  const delegationSection =
+    '\n\nALT AJAN KULLANIMI (spawn_agent):' +
+    '\n- Çok dosyalı keşif ("nerede tanımlı", "hangi modüller etkilenir", "tüm çağrı yerleri") → ' +
+    '2-4 `explore` alt ajanı **paralel** (background=true); her birine farklı ve dar bir alan ver.' +
+    '\n- Kod incelemesi veya risk taraması → `review` alt ajanı.' +
+    '\n- Bağımsız, çok adımlı uygulama işi → `general` alt ajanı.' +
+    '\n- Tek dosya, tek komut veya zaten bildiğin bir yerde arama → **devretme**, doğrudan yap.' +
+    '\n- Görev metni kendi kendine yetsin: hedef + aranacak alan/dosya kalıbı + beklenen çıktı biçimi. ' +
+    '"Şuna bak" gibi belirsiz görev verme; alt ajanlar aynı işi tekrarlar.' +
+    '\n- Aynı görevi iki kez başlatma. Sınır: aynı anda en fazla ' +
+    String(MAX_CONCURRENT_SUBAGENTS) +
+    ', bu istekte toplam en fazla ' +
+    String(MAX_SUBAGENTS_PER_REQUEST) +
+    '.' +
+    '\n- Alt ajan sonucu bir gözlemdir; çelişki varsa aracı kendin doğrula.'
+
   // Canlı koşuda gözlendi: model komutu `powershell -Command "… $_ …"` ile
   // sarmaladı; dış katman `$_`'yi boşalttı ve komut düştü. Kaynağında kesmek
   // için kural açıkça yazılır (sarmalayıcı ayrıca çözülüyor).
@@ -380,7 +478,13 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   if (systemIndex >= 0) {
     const existing = messages[systemIndex]
     if (typeof existing.content === 'string') {
-      existing.content += workspaceSection + planSection + todoSection + shellSection + skillSection
+      existing.content +=
+        workspaceSection +
+        planSection +
+        todoSection +
+        delegationSection +
+        shellSection +
+        skillSection
     }
   } else {
     messages.unshift({
@@ -392,6 +496,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         workspaceSection +
         planSection +
         todoSection +
+        delegationSection +
         shellSection +
         skillSection
     })

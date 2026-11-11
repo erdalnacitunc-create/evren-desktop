@@ -21,6 +21,7 @@ import { callPluginTool, listPluginTools, type AgentPluginTool } from '../plugin
 import { BrowserSession } from './browser'
 import { runLighthouseAudit } from '../lighthouse'
 import { queryUsbInventory, runPythonScript, usbDeviceReport } from './hardware'
+import { clampSkillBody } from './skillCatalog'
 import { waitForQuestion } from './question'
 import { captureScreen, runComputerCommand, toSendKeys } from './computer'
 import {
@@ -575,14 +576,14 @@ export function createTools(options: {
       name: 'skill',
       category: 'read',
       description:
-        'Kurulu bir becerinin talimatlarını yükler. Kullanılabilir beceriler: ' +
-        skills.map((skill) => `${skill.name} [${skill.id}]`).join(', '),
+        'Kurulu bir becerinin talimatlarını yükler. Kullanılabilir beceriler sistem ' +
+        'istemi kataloğunda listelenir; `id` alanına becerinin kimliğini ver.',
       parameters: {
         type: 'object',
         properties: {
           id: {
             type: 'string',
-            description: 'Yüklenecek becerinin kimliği.',
+            description: 'Yüklenecek becerinin kimliği (katalogdaki [id]).',
             enum: skills.map((skill) => skill.id)
           }
         },
@@ -592,9 +593,10 @@ export function createTools(options: {
       execute: async (args) => {
         const skill = skills.find((item) => item.id === str(args.id))
         if (!skill) throw new Error(`Beceri bulunamadı: ${str(args.id)}`)
+        // Gövde token bütçesine kırpılır: uzun bir skill tüm bağlamı yemesin.
         return {
           ok: true,
-          content: `${skill.content}\n\n---\nTemel dizin: ${skill.baseDir}`
+          content: `${clampSkillBody(skill.content)}\n\n---\nTemel dizin: ${skill.baseDir}`
         }
       }
     })

@@ -49,9 +49,9 @@ export interface TopologyPlan {
 // ---------------------------------------------------------------------------
 
 /** Aynı anda çalışabilecek alt ajan sayısı. */
-export const MAX_CONCURRENT_SUBAGENTS = 4
+export const MAX_CONCURRENT_SUBAGENTS = 6
 
-/** Tek istekte toplam kaç alt ajan açılabilir. */
+/** Tek istekte toplam kaç alt ajan açılabilir (bütçe). */
 export const MAX_SUBAGENTS_PER_REQUEST = 6
 
 /** Çoklu Evren'de üye model sayısı (sentez çağrısı hariç). */
@@ -161,21 +161,24 @@ export function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length
 }
 
+/** Metni karşılaştırma için token kümesine çevirir. */
+function taskTokens(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .split(/\s+/)
+      .filter((token) => token.length > 2)
+  )
+}
+
 /**
- * Görev metinlerinin benzerliği (0–1) — aynı işi iki kez açmayı engellemek
- * için. Jaccard benzerliği; Türkçe için küçük harfe indirip noktalama atılır.
+ * İki görevin düz Jaccard benzerliği (0–1). Yalnızca raporlama içindir;
+ * tekrar tespiti `isDuplicateTask` ile yapılır.
  */
 export function taskSimilarity(a: string, b: string): number {
-  const tokenize = (value: string): Set<string> =>
-    new Set(
-      value
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-        .split(/\s+/)
-        .filter((token) => token.length > 2)
-    )
-  const left = tokenize(a)
-  const right = tokenize(b)
+  const left = taskTokens(a)
+  const right = taskTokens(b)
   if (left.size === 0 || right.size === 0) return 0
   let intersection = 0
   for (const token of left) if (right.has(token)) intersection += 1
@@ -183,9 +186,59 @@ export function taskSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : intersection / union
 }
 
-/** Yeni görev, mevcut görevlerden biriyle fazla benzeşiyor mu? */
+/**
+ * Yeni görev, mevcut görevlerden biriyle gerçekten **aynı** mı?
+ *
+ * ## Neden düz Jaccard yetmez
+ *
+ * Modeller görevleri şablonla yazar: "X ile ilgili tüm dosyaları bul, her
+ * birinde tanımlı fonksiyonları listele". Yalnızca `X` değişir. Düz Jaccard
+ * bu iki **farklı** görevi %70+ benzer görüp ikincisini reddeder — canlı
+ * testte ilk 6 alt ajan yerine 1 tanesi çalıştı, çünkü diğerleri "yinelenen"
+ * sayıldı.
+ *
+ * ## Çözüm: IDF ağırlıklı benzerlik
+ *
+ * Mevcut görevlerde sık geçen token (şablon sözcükleri: "ilgili", "dosyaları",
+ * "listele") düşük ağırlık alır; yalnızca bir görevde geçen ayırt edici token
+ * ("faturalama", "arama") yüksek ağırlık alır. Böylece şablon ortaklığı
+ * benzerliği şişirmez, gerçek tekrar yakalanır.
+ */
 export function isDuplicateTask(prompt: string, existing: string[]): boolean {
-  return existing.some((other) => taskSimilarity(prompt, other) >= DUPLICATE_TASK_SIMILARITY)
+  if (existing.length === 0) return false
+  const target = taskTokens(prompt)
+  if (target.size === 0) return false
+
+  // Belge frekansı: her token kaç mevcut görevde geçiyor.
+  const frequency = new Map<string, number>()
+  for (const other of existing) {
+    for (const token of taskTokens(other)) {
+      frequency.set(token, (frequency.get(token) ?? 0) + 1)
+    }
+  }
+  const weight = (token: string): number => 1 / (1 + (frequency.get(token) ?? 0))
+
+  for (const other of existing) {
+    const otherTokens = taskTokens(other)
+    if (otherTokens.size === 0) continue
+
+    let intersection = 0
+    let union = 0
+    for (const token of target) {
+      const w = weight(token)
+      union += w
+      if (otherTokens.has(token)) intersection += w
+    }
+    // `target` içinde olmayan token'ları da birleşime ekle (ağırlıksız
+    // sayılmaz: onlar da bu görevde ayırt edici olabilir).
+    for (const token of otherTokens) {
+      if (target.has(token)) continue
+      union += weight(token)
+    }
+    if (union === 0) continue
+    if (intersection / union >= DUPLICATE_TASK_SIMILARITY) return true
+  }
+  return false
 }
 
 // ---------------------------------------------------------------------------

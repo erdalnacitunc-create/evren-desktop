@@ -27,6 +27,7 @@ import {
   MAX_CONCURRENT_SUBAGENTS,
   MAX_SUBAGENTS_PER_REQUEST
 } from '../../shared/agentTopology'
+import { MAX_FANOUT_CONCURRENCY } from '../../shared/agentFanout'
 
 export interface SubagentGateOptions {
   maxConcurrent?: number
@@ -79,9 +80,15 @@ function gateError(reason: GateRejection, message: string): GateAcquireError {
 }
 
 export function createSubagentGate(options: SubagentGateOptions = {}): SubagentGate {
+  // Varsayılan 2: canlı koşuda 4 ajan + ana ajan aynı anda istek atınca
+  // sağlayıcı "slow_down" (ramp-rate) döndürdü ve 11 retry oluştu.
+  // Ramp-rate limiti istek sayısından değil, artış HIZINDAN tetiklenir.
   const maxConcurrent = Math.max(
     1,
-    Math.round(options.maxConcurrent ?? MAX_CONCURRENT_SUBAGENTS)
+    Math.min(
+      MAX_CONCURRENT_SUBAGENTS,
+      Math.round(options.maxConcurrent ?? MAX_FANOUT_CONCURRENCY)
+    )
   )
   const maxPerRequest = Math.max(
     1,

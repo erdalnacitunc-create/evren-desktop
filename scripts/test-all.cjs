@@ -62,6 +62,8 @@ const SUITES = [
   { file: 'scripts/agent-exploration-hint-test.ts', label: 'Keşif ipucu (listele≠oku)', fast: true },
   { file: 'scripts/agent-spawn-trigger-test.ts', label: 'Alt ajan tetikleme (uçtan uca)' },
   { file: 'scripts/agent-subagent-limit-result-test.ts', label: 'Alt ajan limitinde sentez' },
+  { file: 'scripts/agent-fanout-test.ts', label: 'Kademeli fan-out planı', fast: true },
+  { file: 'scripts/agent-fanout-e2e-test.ts', label: 'Kademeli fan-out uçtan uca' },
   { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' },
   { file: 'scripts/max-steps-test.ts', label: 'Adım sınırı davranışı' },
   { file: 'scripts/continuation-test.ts', label: 'Kesilen yanıtı sürdürme' },

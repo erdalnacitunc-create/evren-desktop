@@ -133,7 +133,10 @@ export function createSubagentTask(
 export function updateSubagentTask(
   id: string,
   patch: Partial<
-    Pick<SubagentTaskInfo, 'status' | 'finishedAt' | 'result' | 'error'>
+    Pick<
+      SubagentTaskInfo,
+      'status' | 'finishedAt' | 'result' | 'error' | 'partial' | 'partialReason'
+    >
   >
 ): SubagentTaskInfo | null {
   const record = tasks.get(id)

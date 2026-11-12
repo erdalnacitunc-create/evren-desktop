@@ -297,6 +297,13 @@ export interface SubagentTaskInfo {
   lastAttemptAt?: number
   result?: string
   error?: string
+  /**
+   * Sonuç eksik: ajan adım/süre bütçesine takıldı ve elindekiyle rapor yazdı.
+   * Ana ajan bunu bilmeli; "kısmi" bilgisini tahmin etmek zorunda kalmamalı.
+   */
+  partial?: boolean
+  /** Sonucun hangi nedenle kesildiği. */
+  partialReason?: 'steps' | 'tools' | 'deadline' | 'tool-timeout'
 }
 
 export interface SubagentSettings {

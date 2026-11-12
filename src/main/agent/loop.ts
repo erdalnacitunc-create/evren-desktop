@@ -253,7 +253,12 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     agentType: 'explore' | 'review' | 'general',
     prompt: string,
     childController: AbortController
-  ): Promise<{ ok: boolean; content: string }> =>
+  ): Promise<{
+    ok: boolean
+    content: string
+    partial?: boolean
+    partialReason?: 'steps' | 'tools' | 'deadline' | 'tool-timeout'
+  }> =>
     runSubagent({
       parentRequestId: requestId,
       baseUrl,
@@ -307,9 +312,13 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       if (!background) {
         try {
           const result = await executeSubagent(agentType, prompt, controller)
+          // Kısmi sonuç açıkça etiketlenir: ana ajan tahmin etmek zorunda kalmasın.
+          const marker = result.partial ? `[KISMİ — ${result.partialReason}]` : ''
           return {
             ok: result.ok,
-            content: `Alt ajan (${agentType}) sonucu:\n\n${result.content}`
+            content:
+              `Alt ajan (${agentType}) sonucu${marker ? ' ' + marker : ''}:\n\n` +
+              result.content
           }
         } finally {
           subagentGate.release(requestId)
@@ -345,7 +354,9 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             updateSubagentTask(taskId, {
               status: result.ok ? 'done' : 'error',
               result: result.ok ? result.content : undefined,
-              error: result.ok ? undefined : result.content
+              error: result.ok ? undefined : result.content,
+              partial: result.partial,
+              partialReason: result.partialReason
             })
           }
           const updated = getSubagentTask(taskId)
@@ -380,9 +391,12 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       const info = await waitForSubagentTask(taskId, timeoutMs)
       if (!info) return { ok: false, content: `Görev bulunamadı: ${taskId}` }
       if (info.status === 'done') {
+        const marker = info.partial ? `[KISMİ — ${info.partialReason ?? 'bütçe'}]` : ''
         return {
           ok: true,
-          content: `Alt ajan (${info.agentType}) sonucu:\n\n${info.result ?? '(sonuç yok)'}`
+          content:
+            `Alt ajan (${info.agentType}) sonucu${marker ? ' ' + marker : ''}:\n\n` +
+            (info.result ?? '(sonuç yok)')
         }
       }
       return { ok: false, content: JSON.stringify(info, null, 2) }
@@ -465,7 +479,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     'list_files/glob/run_command kullan, **devretme**.' +
     '\n- İÇERİK doğrulaması gerekiyorsa ve dosya sayısı 5\'ten fazlaysa (sır taraması, ' +
     'protokol alanları, gerçek bağımlılıklar, "tüm çağrı yerleri", fonksiyon davranışı) → ' +
-    '2-4 `explore` alt ajanı **paralel** (background=true); her birine farklı dosya grubu ver.' +
+    'alt ajan sayısını **kapsama göre** seç: <15 dosya → 1, 15-60 → 2, daha büyükse 3-4. Hepsini birden başlatma; eşzamanlılık en fazla 2 olmalı (sağlayıcı ramp-rate limiti).' +
     '\n- Kod incelemesi veya risk taraması → `review` alt ajanı.' +
     '\n- Bağımsız, çok adımlı uygulama işi → `general` alt ajanı.' +
     '\n- Tek dosya, tek komut veya zaten bildiğin bir yerde arama → **devretme**, doğrudan yap.' +
@@ -476,7 +490,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     ', bu istekte toplam en fazla ' +
     String(MAX_SUBAGENTS_PER_REQUEST) +
     '.' +
-    '\n- Alt ajan sonucu bir gözlemdir; çelişki varsa aracı kendin doğrula.'
+    '\n- Alt ajan sonucu bir gözlemdir; çelişki varsa aracı kendin doğrula.' +
+    '\n- Alt ajana kapsam verirken build artefaktlarını dışla: node_modules, build, dist, .pio, .dart_tool, .git, target, bin, obj.'
 
   // Canlı koşuda gözlendi: model komutu `powershell -Command "… $_ …"` ile
   // sarmaladı; dış katman `$_`'yi boşalttı ve komut düştü. Kaynağında kesmek

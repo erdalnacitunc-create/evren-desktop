@@ -16,19 +16,19 @@ Windows `.exe` ve Linux `.deb` aynı sürüm numarasını kullanır.
 ## Pardus'a kurulum
 
 ```bash
-sudo apt install ./evren-desktop_0.4.8_amd64.deb
+sudo apt install ./evren-desktop_0.4.9_amd64.deb
 evren-desktop
 ```
 
 veya:
 
 ```bash
-chmod +x "EVREN Desktop-0.4.8.AppImage"
-./"EVREN Desktop-0.4.8.AppImage"
+chmod +x "EVREN Desktop-0.4.9.AppImage"
+./"EVREN Desktop-0.4.9.AppImage"
 ```
 
 > Not: GitHub, yükleme sırasında dosya adındaki boşlukları noktaya çevirir.
-> İndirdiğiniz dosya `EVREN.Desktop-0.4.8.AppImage` olarak görünebilir;
+> İndirdiğiniz dosya `EVREN.Desktop-0.4.9.AppImage` olarak görünebilir;
 > `chmod +x` ile çalıştırın. Sağlama toplamı için `SHA256SUMS-linux.txt`
 > dosyasındaki ada bakın.
 

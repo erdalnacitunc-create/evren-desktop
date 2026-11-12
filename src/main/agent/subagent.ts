@@ -15,6 +15,7 @@ import type {
 import { approvalKey, waitForApproval } from './approval'
 import { createTools } from './tools'
 import { unknownToolMessage } from './toolSuggest'
+import { planFanout, scopeBriefing } from '../../shared/agentFanout'
 import { buildSkillCatalog, buildSkillHint, routeSkills } from './skillCatalog'
 import {
   progressNudgeMessage,
@@ -82,6 +83,32 @@ const DEADLINE_MS = 210_000
  * `tool_choice: 'none'` ile engellenir ve modelden elindeki bulguları
  * yazması istenir. Böylece her zaman metin döner.
  */
+/**
+ * Tek bir araç çağrısına süre sınırı koyar.
+ *
+ * Neden: canlı koşuda alt ajanın çalıştırdığı `Get-ChildItem -Recurse` 3 GB'lık
+ * bir dizinde dakikalarca sürdü ve ajanın 210 sn'lik bütçesini tek başına
+ * tüketti. Alt ajan araçlarına sinyal geçirilmiyordu, yani durdurulamıyordu.
+ */
+const TOOL_TIMEOUT_MS = 90_000
+
+async function runToolWithTimeout<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  parentSignal: AbortSignal,
+  timeoutMs = TOOL_TIMEOUT_MS
+): Promise<T> {
+  const controller = new AbortController()
+  const onParentAbort = (): void => controller.abort()
+  parentSignal.addEventListener('abort', onParentAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs))
+  try {
+    return await run(controller.signal)
+  } finally {
+    clearTimeout(timer)
+    parentSignal.removeEventListener('abort', onParentAbort)
+  }
+}
+
 async function finalizeSubagent(input: {
   messages: ChatMessage[]
   request: ChatRequest
@@ -89,15 +116,18 @@ async function finalizeSubagent(input: {
   apiKey: string
   controller: AbortController
   tools: unknown[]
-  reason: 'steps' | 'tools'
+  reason: 'steps' | 'tools' | 'deadline'
 }): Promise<string> {
-  const note =
+  const limitNote =
     input.reason === 'steps'
-      ? 'Adım sınırına ulaştın. Yeni araç çağırma. Şimdiye kadar topladığın bulguları, ' +
-        'dosya:satır referanslarıyla birlikte düzenli bir rapor olarak YAZ. ' +
-        'Eksik kalan noktaları "doğrulanamadı" diye işaretle.'
-      : 'Araç çağrısı sınırına ulaştın. Yeni araç çağırma. Elindeki bulguları ' +
-        'dosya:satır referanslarıyla birlikte rapor olarak YAZ. Eksik kalanları belirt.'
+      ? 'Adım sınırına ulaştın.'
+      : input.reason === 'deadline'
+        ? 'Süre bütçen doldu.'
+        : 'Araç çağrısı sınırına ulaştın.'
+  const note =
+    limitNote +
+    ' Yeni araç çağırma. Şimdiye kadar topladığın bulguları, dosya:satır referanslarıyla ' +
+    'birlikte düzenli bir rapor olarak YAZ. Eksik kalan noktaları "doğrulanamadı" diye işaretle.'
 
   const body = {
     ...buildBaseBody(input.request),
@@ -146,6 +176,10 @@ function agentInstruction(type: SubagentType, prompt: string, workspaceRoot: str
   const workspace = workspaceRoot ? `\nÇalışma alanı: ${workspaceRoot}` : ''
   // Verimlilik kuralları. Canlı koşuda 4 explore ajanı 16 dosyayı tek tek
   // okumaya çalışıp adım limitine takıldı ve BOŞ sonuç döndürdü.
+  // Kapsam disiplini: build artefaktları adım bütçesini yakar.
+  // Canlı koşuda ajanlar 3 GB'lık master\ ve mobil\ dizinlerinde
+  // node_modules/build içine girip "kısmi" rapor döndürdü.
+  const scope = scopeBriefing(planFanout())
   const efficiency =
     '\n\nVERİMLİLİK:' +
     '\n- Aynı adımda birden çok dosyayı oku: tek yanıtta birden fazla `read_file` çağrısı yap (paralel araç çağrısı). ' +
@@ -153,13 +187,18 @@ function agentInstruction(type: SubagentType, prompt: string, workspaceRoot: str
     '\n- Önce daralt: `grep`/`glob` ile ilgili dosyaları bul, sonra yalnızca gerekenleri oku.' +
     '\n- 5 adım içinde metin yazmaya başla; bulguları arada özetle.' +
     '\n- Rapor yazarken araç çağırma; elindekiyle bitir, eksikleri "doğrulanamadı" diye işaretle.'
-  return `${base}${workspace}${efficiency}\n\nGörev:\n${prompt}\n\nYalnızca ana ajana dönük kısa bir sonuç üret; kullanıcıya doğrudan hitap etme. Gereksiz araç çıktısını tekrar etme.`
+  return `${base}${workspace}${scope}${efficiency}\n\nGörev:\n${prompt}\n\nYalnızca ana ajana dönük kısa bir sonuç üret; kullanıcıya doğrudan hitap etme. Gereksiz araç çıktısını tekrar etme.`
 }
 
-export async function runSubagent(options: SubagentOptions): Promise<{
+export interface SubagentResult {
   ok: boolean
   content: string
-}> {
+  /** Sonuç eksik: bütçe/süre nedeniyle kesildi. */
+  partial?: boolean
+  partialReason?: 'steps' | 'tools' | 'deadline' | 'tool-timeout'
+}
+
+export async function runSubagent(options: SubagentOptions): Promise<SubagentResult> {
   const {
     parentRequestId,
     baseUrl,
@@ -226,9 +265,14 @@ export async function runSubagent(options: SubagentOptions): Promise<{
           apiKey,
           controller,
           tools: registry.definitions(),
-          reason: 'steps'
+          reason: 'deadline'
         })
-        return { ok: true, content: synthesized.slice(0, 12_000) }
+        return {
+          ok: true,
+          content: synthesized.slice(0, 12_000),
+          partial: true,
+          partialReason: 'deadline'
+        }
       }
       const body = {
         ...buildBaseBody(request),
@@ -282,7 +326,12 @@ export async function runSubagent(options: SubagentOptions): Promise<{
             tools: registry.definitions(),
             reason: 'tools'
           })
-          return { ok: true, content: synthesized.slice(0, 12_000) }
+          return {
+            ok: true,
+            content: synthesized.slice(0, 12_000),
+            partial: true,
+            partialReason: 'tools'
+          }
         }
         toolCallCount += 1
 
@@ -338,11 +387,24 @@ export async function runSubagent(options: SubagentOptions): Promise<{
         }
 
         try {
-          const execution = await tool.execute(args, {
-            requestId: parentRequestId,
-            send,
-            checkpointId: `${parentRequestId}:sub:${toolCallCount}`
-          })
+          // Kalan bütçeyi araç zaman aşımına yansıt: son tarihe 10 sn kalana
+          // kadar araç çalışabilir, sonrası kesilir.
+          const remaining = Math.max(
+            5_000,
+            DEADLINE_MS - (Date.now() - startedAt) - 10_000
+          )
+          const execution = await runToolWithTimeout(
+            (signal) =>
+              tool.execute(args, {
+                requestId: parentRequestId,
+                sessionId,
+                send,
+                checkpointId: `${parentRequestId}:sub:${toolCallCount}`,
+                signal
+              }),
+            controller.signal,
+            Math.min(TOOL_TIMEOUT_MS, remaining)
+          )
           messages.push({ role: 'tool', tool_call_id: call.id, content: execution.content })
         } catch (error) {
           const content = `Alt ajan araç hatası: ${
@@ -376,7 +438,12 @@ export async function runSubagent(options: SubagentOptions): Promise<{
       tools: registry.definitions(),
       reason: 'steps'
     })
-    return { ok: true, content: synthesized.slice(0, 12_000) }
+    return {
+      ok: true,
+      content: synthesized.slice(0, 12_000),
+      partial: true,
+      partialReason: 'steps'
+    }
   } finally {
     await registry.dispose()
   }

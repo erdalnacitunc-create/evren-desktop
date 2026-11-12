@@ -44,8 +44,12 @@ async function main(): Promise<void> {
     check('istek başına tavan 6', MAX_SUBAGENTS_PER_REQUEST, 6)
     const gate = createSubagentGate()
     const snap = gate.snapshot()
-    check('kapı varsayılanı eşzamanlı', snap.maxConcurrent, 6)
+    // Varsayılan 2: canlı koşuda 4 ajan + ana ajan aynı anda istek atınca
+    // sağlayıcı "slow_down" döndürdü. Hard cap hâlâ 6 (açıkça istenirse).
+    check('kapı varsayılanı eşzamanlı 2', snap.maxConcurrent, 2)
     check('kapı varsayılanı bütçe', snap.maxPerRequest, 6)
+    const wide = createSubagentGate({ maxConcurrent: 6 })
+    check('açıkça 6 istenebilir', wide.snapshot().maxConcurrent, 6)
     check('başlangıçta etkin 0', snap.active, 0)
   }
 
@@ -196,7 +200,7 @@ async function main(): Promise<void> {
 
   // ============ 13) Gerçekçi senaryo: 6 paralel + 2 fazla ============
   {
-    const gate = createSubagentGate()
+    const gate = createSubagentGate({ maxConcurrent: 6 })
     const released: number[] = []
     const runs: Array<Promise<void>> = []
     for (let i = 0; i < 6; i++) {

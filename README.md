@@ -188,126 +188,137 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-# 0.4.8 Beta — alt ajanlar boş sonuç döndürüyordu
+# 0.4.9 Beta — kademeli fan-out ve kapsam disiplini
 
-0.4.7 alt ajanı **tetikledi** (plc_proje koşunuzda 4 paralel `explore`
-başladı) ama sonuçlar boştu. Bu sürüm o kusuru kapatıyor.
+Alt ajan sayısı artık **kapsama göre** seçiliyor ve ajanlar **kademeli**
+başlıyor. Amaç: 0.4.8'deki retry fırtınasını ve "kısmi rapor" oranını
+düşürmek.
 
-## Canlı kanıt: 4 ajan, 4 boş sonuç
+## Önerinizin değerlendirmesi
 
-Sizin plc_proje koşunuzda:
+Öneriniz: *"sorgu kapsamına göre alt ajan sayısını belirle, ajanları tek tek
+(darboğaz oluşturmayacak şekilde) başlat."*
+
+**Doğru olan kısım:** sayının kapsama göre seçilmesi. 0.4.8'de model her
+sorguda 4 ajan açıyordu; 15 dosyalık iş için bu israf.
+
+**Düzeltilmesi gereken kısım:** "tek tek" (tam seri) yanlış olur. 4 ajan ×
+3 dk = 12 dk; paralelliğin tüm faydası kaybolur. Anthropic'in ölçümü:
+paralelleştirme karmaşık sorgularda süreyi **%90** kısaltıyor.
+
+**Bizim uyguladığımız orta yol — kademeli fan-out:**
+
+| Kapsam | Ajan | Eşzamanlı |
+|---|---|---|
+| < 15 dosya | 1 | 1 |
+| 15–60 dosya | 2 | 2 |
+| > 60 dosya veya 4+ dizin | 3–4 | **2** (2 dalga) |
+
+Yani 4 ajan gerekiyorsa **2+2 dalga** hâlinde çalışır. Süre paralel çalışmaya
+yakın kalır, ani istek sıçraması olmaz.
+
+## Neden ani sıçrama önemli — OpenAI rate-limit rehberi
+
+Canlı 0.4.8 koşusunda 4 ajan + ana ajan aynı anda istek attı: **5× ani artış**.
+Sağlayıcı `slow_down` (ramp-rate) döndürdü → **11 retry**, koşu 13 dakika.
+
+OpenAI'ın belgesi bunu açıkça söylüyor:
+
+> `429 / rate_limit_error / slow_down` — *"Your request rate increased too
+> quickly. Follow Retry-After when present, **reduce your request rate, and
+> then increase it gradually**."*
+
+Ve: *"A `slow_down` error can occur even when your traffic is within its
+requests-per-minute limits. It reflects **how quickly traffic increased**."*
+
+Yani limit istek **sayısı** değil, artış **hızı**. Bu yüzden eşzamanlılığı
+6'dan 2'ye indirdim ve ajanları kademeli başlatıyorum. Hard cap 6 olarak
+duruyor (açıkça istenirse).
+
+## İkinci kusur: kapsam disiplini
+
+0.4.8 koşusunda ajanlara `master\` (3 GB) ve `mobil\` (3 GB) dizinleri
+verildi. Ajanlar `build`/`node_modules` içinde adım bütçesini yaktı ve
+"kısmi" rapor döndürdü.
+
+İki düzeltme:
+
+**1. Kapsam brifingi** — her alt ajanın istemine otomatik ekleniyor:
 
 ```
-11:32:55  spawn_agent  →  firmware (ESP32)
-11:32:55  spawn_agent  →  mobil / master / paylasim (Flutter)
-11:32:55  spawn_agent  →  bulut / supabase / crm (backend)
-11:32:55  spawn_agent  →  kök doküman + tooling
+KAPSAM KURALLARI:
+- Şu dizinlere GİRME: node_modules, .git, build, dist, out, .dart_tool, .pio, …
+- Önce grep/glob ile daralt, sonra yalnızca gereken dosyaları oku.
 ```
 
-Model işi **mimari katman** bazında böldü — tam istediğimiz davranış. Ama
-`subagent-tasks.json` şunu gösterdi:
+**2. Araç zaman aşımı + sinyal** — alt ajan araçlarına artık `AbortSignal`
+geçiyor. Bir `Get-ChildItem -Recurse` 3 GB'lık dizinde dakikalarca sürebiliyordu
+ve **durdurulamıyordu**; tek başına ajanın tüm bütçesini tüketiyordu.
 
-| Ajan | Süre | Sonuç |
-|---|---|---|
-| firmware | 5 dk 46 sn | `"Alt ajan adım limitine ulaştı.\n\n"` ← **boş** |
-| mobil | 5 dk 03 sn | `"…\n\nI'll start by mapping the workspace…"` ← cümle ortası |
-| bulut | 3 dk 35 sn | **boş** |
-| doküman | 4 dk 17 sn | **boş** |
+- Araç başına azami 90 sn
+- Son tarihe 10 sn kala kesilir
+- Kesilirse ajan elindekini yazar (`partialReason: 'tool-timeout'`)
 
-**Dördü de `MAX_STEPS = 10`'a takıldı.** Ajan tüm adımlarını araç çağrısına
-harcadı, hiç metin üretmedi. Ana ajan dört boş sonuç aldı — yani alt ajanlar
-tamamen boşa gitti (21 dakika, 4 ajan, sıfır bilgi).
+## Üçüncü iyileştirme: kısmi sonuç artık yapısal
 
-Ayrıca `task_wait` 240 sn'de zaman aşımına uğradı (ajanlar 5-6 dk sürdü).
+0.4.8'de ana ajan "kısmi mi" diye metinden tahmin ediyordu; nihai raporda
+*"içerik doğrulanamadı"* diye 12 kez yazdı.
 
-## Dört düzeltme
+Artık `SubagentTaskInfo` üzerinde:
 
-**1. Limit dolunca metin zorunlu sentez turu**
+```ts
+partial?: boolean
+partialReason?: 'steps' | 'tools' | 'deadline' | 'tool-timeout'
+```
 
-Ana döngüdeki `finalizeRun` ile aynı desen (`finalizeSubagent`):
+Ve ana ajana dönen metinde açıkça görünüyor:
 
-- Araç tanımları **dolu** gönderilir + `tool_choice: 'none'`
-  (0.4.4 dersi: boş `tools` dizisi sağlayıcıda hata verir)
-- Modele: "Yeni araç çağırma. Şimdiye kadar topladığın bulguları dosya:satır
-  referanslarıyla rapor olarak YAZ."
-- Eski `"adım limitine ulaştı"` + boş metin dönüşü **kaldırıldı**
+```
+Alt ajan (explore) sonucu [KISMİ — deadline]:
 
-**2. Limitler gerçekçi**
-
-| | Önce | Sonra |
-|---|---|---|
-| `MAX_STEPS` | 10 | **20** |
-| `MAX_TOOL_CALLS` | 20 | **30** |
-
-Gerekçe: 16 dosya okuyan bir ajan 10 adıma sığmıyor. Anthropic: basit bilgi
-toplama 3–10 araç çağrısı, karşılaştırma 10–15; içerik okuma + sentez için
-20/30 gerçekçi.
-
-**3. Verimlilik kuralları (asıl kazanç)**
-
-Alt ajan talimatına eklendi:
-
-- **Aynı adımda birden çok `read_file`** — paralel araç çağrısı
-- Önce `grep`/`glob` ile daralt, sonra oku
-- 5 adım içinde metin yazmaya başla
-- Rapor yazarken araç çağırma
-
-**Ölçülen etki:** 30 dosyalık gerçek model testi **33 saniyede** bitti
-(önce 5–6 dakika). Bu hem maliyeti hem `task_wait` zaman aşımını çözdü.
-
-**4. Yumuşak son tarih (210 sn)**
-
-Ana ajan çoğunlukla `task_wait` ile 240 sn bekler. Alt ajan bu süreyi aşarsa
-ana ajan boşa bekler. Artık 210 sn'yi geçen ajan yeni araç çağırmayı bırakıp
-elindekini yazar.
-
-Ayrıca alt ajana `progressGuard` eklendi: 4 adım metinsiz geçerse "bulguları
-raporla" yönlendirmesi alır.
+## Özet — …
+```
 
 ## Doğrulama
 
-**Gerçek model, doğrudan alt ajan testi** (`agent-live-subagent-test`):
+| Paket | Kontrol | Kapsam |
+|---|---|---|
+| `agent-fanout-test` | 42 | Kapsam eşikleri, eşzamanlılık tavanı, kademe, brifing, plc_proje senaryosu |
+| `agent-fanout-e2e-test` | 6 | Gerçek döngü: 4 ajan → **tepe eşzamanlılık 2**, 2+2 dalga |
+
+Uçtan uca ölçüm:
 
 ```
-süre: 33 sn · sonuç: 1742 karakter · anılan dosya: 30/30
-katman sınıflandırması: doğru
-"## Sonuç: moduller/ .ts dosyaları (30/30 okundu)"
-"### Kimlik doğrulama katmanı (10 dosya) — birim0.ts:3 islem0 · …"
+zaman çizelgesi: 49ms, 49ms, 178ms, 178ms · tepe: 2
 ```
 
-Eski hata metni yok, sonuç dolu ve gerçek bulgular içeriyor.
+Yani 4 ajan iki dalga hâlinde gitti; önceki davranışta dördü de 0 ms'de
+başlıyordu.
 
-**Sentetik test** (`agent-subagent-limit-result-test`, 9 kontrol): model 25
-adım boyunca araç çağırır, metin yazmaz → sentez turu atılır, sonuç dolu döner.
+`agent-live-subagent-test` (gerçek model, 30 dosya): 6/6 geçti, sonuç dolu.
 
-Toplam: **56 paket / 1294 kontrol** (önceki: 55/1285). typecheck ✓ build ✓ e2e ✓
+Toplam: **58 paket / 1342 kontrol** (önceki: 56/1294). typecheck ✓ build ✓ e2e ✓
 
-## Yan gözlem: model artık daha akıllı strateji seçiyor
+## Neden tam seri (önerinizin ilk hâli) değil
 
-75 dosyalık canlı testte model bu kez **hiç alt ajan kullanmadı** ve
-`repo_map` + `grep` ile kestirme buldu:
+| Strateji | 4 ajan süresi | İstek profili |
+|---|---|---|
+| Tam paralel | ~3 dk | 5× ani sıçrama → retry fırtınası |
+| **Kademeli 2+2** | **~4–5 dk** | 3× → 2× kademeli, retry yok |
+| Tam seri | ~12 dk | 1× sabit, retry yok |
 
-```
-list_files 1 · repo_map 1 · read_file 9 · grep 4 · 108 sn
-tüm sırlar bulundu (3/3 katman)
-```
-
-Bu **doğru** davranış: grep'le bulunabilen bir şeyi 75 dosya okuyarak aramak
-israftır. Devretme bir zorunluluk değil, seçenek olmalı — mimarinin hedefi bu.
+Kademeli, paralelin hızına yakın; tam seriden 2–3 kat hızlı.
 
 ## Sıradaki
 
-Artık şu zincir kanıtlanmış durumda:
+0.4.9'u kurup **aynı plc_proje sorgusunu** tekrar çalıştırın. Ölçülecek üç şey:
 
-```
-keşif ipucu → alt ajan tetikleme → dolu sonuç → ana ajanda sentez
-```
+1. **Retry sayısı** — 11'den kaça düştü?
+2. **Kısmi rapor oranı** — 4/4'ten kaça düştü?
+3. **Süre** — 13 dakikadan kaça düştü?
 
-Bir sonraki adım **triage** (4. aşama): hangi sorgunun hangi moda düşeceğine
-karar vermek. Bunun için gerçek iş yükünüzde `spawn_agent` kullanım oranını ve
-alt ajan sonuçlarının nihai cevaba katkısını ölçmemiz gerekiyor.
-
-Çoklu Evren entegrasyonu hâlâ sizin belirlediğiniz sırada bekliyor.
+Bu üç sayı 4. aşamaya (triage) geçip geçmeyeceğimize karar verecek.
+Çoklu Evren entegrasyonu hâlâ sizin belirlediğiniz sırada.
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.
 İmzalama seçenekleri (yeniden başvuru veya ticari sertifika) ileride

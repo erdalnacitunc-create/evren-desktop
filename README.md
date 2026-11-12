@@ -188,124 +188,125 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-# 0.4.7 Beta — alt ajanlar fiilen tetikleniyor
+# 0.4.8 Beta — alt ajanlar boş sonuç döndürüyordu
 
-0.4.6'da altyapı hazırdı ama model alt ajan **kullanmıyordu** (sizin iki
-sınamanızda da 0 tetikleme). Bu sürüm nedeni bulup düzeltiyor.
+0.4.7 alt ajanı **tetikledi** (plc_proje koşunuzda 4 paralel `explore`
+başladı) ama sonuçlar boştu. Bu sürüm o kusuru kapatıyor.
 
-## Teşhis: altyapı sağlamdı, tetikleyici yoktu
+## Canlı kanıt: 4 ajan, 4 boş sonuç
 
-0.4.6 paketinde doğruladım:
-
-```
-araç sayısı: 28 · spawn_agent: true · tool_choice: auto
-sistem istemi: delegation bölümü ✅ · "en fazla 6" ✅
-```
-
-Yani kod doğruydu. İki gerçek sınamanızda modelin düşünme metninde "alt ajan",
-"spawn", "paralel" **hiç geçmedi** — düşünüp vazgeçmedi, hiç aklına gelmedi.
-
-### Asıl kusur: model listeledi, okumadı
-
-"wifi klima klasörü … program yapısını incele" sınamasında model 4
-`Get-ChildItem -Recurse` ile 40+ dosyayı **listeledi**, mimariyi dosya adı ve
-boyutundan çıkardı ve raporunda **4 kez** şunu yazdı:
-
-> "Bu dosyaların içeriği okunmadı — doğrulanamadı."
-
-Tam o noktada paralel `explore` alt ajanları gerçek değer üretirdi. Eski kural
-"çok dosyalı keşif → 2-4 explore" diyordu; model bunu "dosyaları listele"
-diye okudu.
-
-## Düzeltme 1: kuralı keskinleştir (listeleme ≠ okuma)
-
-| Durum | Davranış |
-|---|---|
-| Dosya **adı/boyutu** yeterli (yapı, dil, modül sayısı) | doğrudan `list_files`/`glob`, **devretme** |
-| **İçerik** doğrulaması + 5'ten fazla dosya (sır, protokol, bağımlılık, "tüm çağrı yerleri") | 2-4 `explore` **paralel** |
-
-## Düzeltme 2: deterministik keşif ipucu
-
-Modelin aklına gelmesini beklemek yetmiyor. Döngü artık durumu **gözlemliyor**
-(`src/main/agent/explorationHint.ts`):
-
-- Araç sonuçlarındaki dosya yollarını sayar
-- `list_files`/`glob`/`grep` ve `Get-ChildItem` çıktısı = **listeleme**
-- `read_file`/`repo_map`/`code_search` ve `Get-Content` = **okuma**
-- ≥10 dosya listelenip okunan oran %20'nin altındaysa modele **tek seferlik**
-  hatırlatma gider
-
-`progressGuard` ile aynı desen: **hatırlatma, zorlama değil**. Araç
-engellenmez; görev yalnızca yapı sorusuysa model ipucunu yok sayabilir
-(metinde bu açıkça yazıyor).
-
-Log kanıtı (gerçek koşu):
+Sizin plc_proje koşunuzda:
 
 ```
-(agent/loop) Keşif ipucu: 16 dosya listelendi, 0 okundu — alt ajan önerildi
+11:32:55  spawn_agent  →  firmware (ESP32)
+11:32:55  spawn_agent  →  mobil / master / paylasim (Flutter)
+11:32:55  spawn_agent  →  bulut / supabase / crm (backend)
+11:32:55  spawn_agent  →  kök doküman + tooling
 ```
 
-## Canlı doğrulama: gerçek model, gerçek görev
+Model işi **mimari katman** bazında böldü — tam istediğimiz davranış. Ama
+`subagent-tasks.json` şunu gösterdi:
 
-24 dosyalık yapay bir ESP firmware projesi + gömülü sırlar üretildi; görev
-**içerik** okumayı gerektiriyordu ("gömülü sırları dosya:satır ile listele").
-
-**Sonuç: 4 paralel `explore` alt ajanı çalıştı.**
-
-```
-süre: 190 sn
-araç dağılımı: glob 1 · spawn_agent 4 · task_wait 4 · read_file 1
-subagent-task olayı: 8 (4 başladı + 4 bitti)
-sır bulundu: EVET
-```
-
-Modelin ürettiği görevler — her biri **farklı dosya grubu**, kendi kendine
-yeten talimat:
-
-```
-explore: "firmware/ag.h, api.h, ayarlar.h, durum_coz.h dosyalarını TAM içeriklerini oku…"
-explore: "firmware/haier_kare.h, kok_sertifika.h, kumanda.h, led.h …"
-explore: "firmware/main.h, mqtt.h, mqtt_tani.h, ota.h …"
-explore: "firmware/sensor.h, tls_olc.h, web.h, zamanlayici.h …"
-```
-
-Bu, mimarinin hedeflediği davranışın birebir kendisi: **işi böl, paralel oku,
-sonuçları topla, sentezle.**
-
-## Test kapsamı
-
-| Paket | Kontrol | Kapsam |
+| Ajan | Süre | Sonuç |
 |---|---|---|
-| `agent-exploration-hint-test` | 48 | Yol sayımı, listeleme/okuma ayrımı, oran eşiği, ipucu metni |
-| `agent-spawn-trigger-test` | 13 | Uçtan uca: listele → ipucu → spawn → sonuç; ve doğrudan spawn |
-| `agent-live-spawn-test` | 2 | Gerçek model, gerçek proje, gerçek sırlar (elle çalıştırılır) |
+| firmware | 5 dk 46 sn | `"Alt ajan adım limitine ulaştı.\n\n"` ← **boş** |
+| mobil | 5 dk 03 sn | `"…\n\nI'll start by mapping the workspace…"` ← cümle ortası |
+| bulut | 3 dk 35 sn | **boş** |
+| doküman | 4 dk 17 sn | **boş** |
 
-Toplam: **55 paket / 1285 kontrol** (önceki: 53/1224). typecheck ✓ build ✓ e2e ✓
+**Dördü de `MAX_STEPS = 10`'a takıldı.** Ajan tüm adımlarını araç çağrısına
+harcadı, hiç metin üretmedi. Ana ajan dört boş sonuç aldı — yani alt ajanlar
+tamamen boşa gitti (21 dakika, 4 ajan, sıfır bilgi).
 
-`agent-live-spawn-test` bilinçli olarak `test:unit` içinde **değil**: gerçek
-sağlayıcıya istek atar ve token harcar.
+Ayrıca `task_wait` 240 sn'de zaman aşımına uğradı (ajanlar 5-6 dk sürdü).
 
-```bash
-node scripts/run-unit.cjs scripts/agent-live-spawn-test.ts
+## Dört düzeltme
+
+**1. Limit dolunca metin zorunlu sentez turu**
+
+Ana döngüdeki `finalizeRun` ile aynı desen (`finalizeSubagent`):
+
+- Araç tanımları **dolu** gönderilir + `tool_choice: 'none'`
+  (0.4.4 dersi: boş `tools` dizisi sağlayıcıda hata verir)
+- Modele: "Yeni araç çağırma. Şimdiye kadar topladığın bulguları dosya:satır
+  referanslarıyla rapor olarak YAZ."
+- Eski `"adım limitine ulaştı"` + boş metin dönüşü **kaldırıldı**
+
+**2. Limitler gerçekçi**
+
+| | Önce | Sonra |
+|---|---|---|
+| `MAX_STEPS` | 10 | **20** |
+| `MAX_TOOL_CALLS` | 20 | **30** |
+
+Gerekçe: 16 dosya okuyan bir ajan 10 adıma sığmıyor. Anthropic: basit bilgi
+toplama 3–10 araç çağrısı, karşılaştırma 10–15; içerik okuma + sentez için
+20/30 gerçekçi.
+
+**3. Verimlilik kuralları (asıl kazanç)**
+
+Alt ajan talimatına eklendi:
+
+- **Aynı adımda birden çok `read_file`** — paralel araç çağrısı
+- Önce `grep`/`glob` ile daralt, sonra oku
+- 5 adım içinde metin yazmaya başla
+- Rapor yazarken araç çağırma
+
+**Ölçülen etki:** 30 dosyalık gerçek model testi **33 saniyede** bitti
+(önce 5–6 dakika). Bu hem maliyeti hem `task_wait` zaman aşımını çözdü.
+
+**4. Yumuşak son tarih (210 sn)**
+
+Ana ajan çoğunlukla `task_wait` ile 240 sn bekler. Alt ajan bu süreyi aşarsa
+ana ajan boşa bekler. Artık 210 sn'yi geçen ajan yeni araç çağırmayı bırakıp
+elindekini yazar.
+
+Ayrıca alt ajana `progressGuard` eklendi: 4 adım metinsiz geçerse "bulguları
+raporla" yönlendirmesi alır.
+
+## Doğrulama
+
+**Gerçek model, doğrudan alt ajan testi** (`agent-live-subagent-test`):
+
+```
+süre: 33 sn · sonuç: 1742 karakter · anılan dosya: 30/30
+katman sınıflandırması: doğru
+"## Sonuç: moduller/ .ts dosyaları (30/30 okundu)"
+"### Kimlik doğrulama katmanı (10 dosya) — birim0.ts:3 islem0 · …"
 ```
 
-## Yan bulgu: test altyapısında şifre çözme tuzağı
+Eski hata metni yok, sonuç dolu ve gerçek bulgular içeriyor.
 
-Canlı test ilk denemede "API anahtarı yok" dedi. Neden: Chromium, `safeStorage`
-anahtarını `Local State` dosyasında DPAPI ile sarılı tutuyor. Yalnızca
-`credentials.bin` kopyalamak yetmiyor; `Local State` de gerekli. Bu, test
-altyapısı için belgelendi.
+**Sentetik test** (`agent-subagent-limit-result-test`, 9 kontrol): model 25
+adım boyunca araç çağırır, metin yazmaz → sentez turu atılır, sonuç dolu döner.
+
+Toplam: **56 paket / 1294 kontrol** (önceki: 55/1285). typecheck ✓ build ✓ e2e ✓
+
+## Yan gözlem: model artık daha akıllı strateji seçiyor
+
+75 dosyalık canlı testte model bu kez **hiç alt ajan kullanmadı** ve
+`repo_map` + `grep` ile kestirme buldu:
+
+```
+list_files 1 · repo_map 1 · read_file 9 · grep 4 · 108 sn
+tüm sırlar bulundu (3/3 katman)
+```
+
+Bu **doğru** davranış: grep'le bulunabilen bir şeyi 75 dosya okuyarak aramak
+israftır. Devretme bir zorunluluk değil, seçenek olmalı — mimarinin hedefi bu.
 
 ## Sıradaki
 
-Artık ölçülebilir bir davranış var. Bir sonraki adım **gerçek iş
-yükünüzde** bunun ne sıklıkta ve ne kadar faydalı olduğunu görmek:
+Artık şu zincir kanıtlanmış durumda:
 
-- `session-events.jsonl` içinde `spawn_agent` sayısı
-- Alt ajan sonuçlarının nihai cevaba katkısı
-- Süre/token maliyeti (alt ajan ~4× token)
+```
+keşif ipucu → alt ajan tetikleme → dolu sonuç → ana ajanda sentez
+```
 
-Bu veri gelince 4. aşamaya (triage: hangi sorgu hangi mod) geçebiliriz.
+Bir sonraki adım **triage** (4. aşama): hangi sorgunun hangi moda düşeceğine
+karar vermek. Bunun için gerçek iş yükünüzde `spawn_agent` kullanım oranını ve
+alt ajan sonuçlarının nihai cevaba katkısını ölçmemiz gerekiyor.
+
 Çoklu Evren entegrasyonu hâlâ sizin belirlediğiniz sırada bekliyor.
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.

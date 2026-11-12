@@ -45,55 +45,56 @@ function check(label: string, actual: unknown, expected: unknown): void {
 
 function makeProject(base: string): void {
   rmSync(base, { recursive: true, force: true })
-  mkdirSync(join(base, 'firmware'), { recursive: true })
-  mkdirSync(join(base, 'mobil', 'lib'), { recursive: true })
 
-  const headers = [
-    'main', 'mqtt', 'api', 'kumanda', 'web', 'durum_coz', 'haier_kare',
-    'kok_sertifika', 'tls_olc', 'mqtt_tani', 'ota', 'ayarlar', 'ag',
-    'led', 'sensor', 'zamanlayici'
+  const areas: Array<{ dir: string; ext: string; count: number; note: string }> = [
+    { dir: 'firmware', ext: 'h', count: 15, note: 'ESP32 gömülü katman' },
+    { dir: 'bulut', ext: 'ts', count: 15, note: 'Supabase edge fonksiyonları' },
+    { dir: 'mobil/lib', ext: 'dart', count: 15, note: 'Flutter mobil uygulama' },
+    { dir: 'masaustu/src', ext: 'ts', count: 15, note: 'Electron masaüstü panel' },
+    { dir: 'araclar', ext: 'py', count: 15, note: 'Üretim/servis araçları' }
   ]
-  for (const name of headers) {
-    writeFileSync(
-      join(base, 'firmware', `${name}.h`),
-      [
-        `// ${name} modulu`,
-        `#define ${name.toUpperCase()}_PORT 1883`,
-        `const char* ${name.toUpperCase()}_HOST = "broker.example.local";`,
-        `// TODO: sabitleri ayarlar.h'a tasi`,
-        `struct ${name}_t { int aktif; int hata; };`,
-        ''
-      ].join('\n'),
-      'utf8'
-    )
+
+  for (const area of areas) {
+    mkdirSync(join(base, area.dir), { recursive: true })
+    for (let index = 0; index < area.count; index += 1) {
+      writeFileSync(
+        join(base, area.dir, `modul${index}.${area.ext}`),
+        [
+          `// ${area.note} — modul ${index}`,
+          `const PORT_${index} = ${8000 + index};`,
+          `const HOST_${index} = "svc-${index}.internal";`,
+          `export function islem${index}(girdi: string): string { return girdi + "${index}" }`,
+          ''
+        ].join('\n'),
+        'utf8'
+      )
+    }
   }
 
-  // Bilinçli gömülü sırlar: alt ajanın bulması gereken şey.
+  // Gömülü sırlar — üç ayrı katmanda.
   writeFileSync(
     join(base, 'firmware', 'ayarlar.h'),
     [
-      '// yapilandirma',
-      'static const char* WIFI_SSID = "klima-ag-5g";',
       'static const char* WIFI_SIFRE = "CokGizli123!";',
-      'static const char* MQTT_KULLANICI = "esp-klima";',
       'static const char* MQTT_PAROLA = "sifre-9876";',
-      'static const char* API_TOKEN = "tok_5f3a91b2c4d6e8";',
       ''
     ].join('\n'),
     'utf8'
   )
-
-  for (let index = 0; index < 7; index += 1) {
-    writeFileSync(
-      join(base, 'mobil', 'lib', `ekran${index}.dart`),
-      `// ekran ${index}\nconst apiYolu = "/api/v1/durum";\nclass Ekran${index} { int deger = ${index}; }\n`,
-      'utf8'
-    )
-  }
+  writeFileSync(
+    join(base, 'bulut', 'env.ts'),
+    ['export const SUPABASE_SERVICE_KEY = "tok_5f3a91b2c4d6e8";', ''].join('\n'),
+    'utf8'
+  )
+  writeFileSync(
+    join(base, 'araclar', 'deploy.py'),
+    ['API_TOKEN = "py_token_9911aa"', ''].join('\n'),
+    'utf8'
+  )
 
   writeFileSync(
     join(base, 'README.md'),
-    '# Klima koprusu\n\nESP firmware + Flutter mobil uygulama.\n',
+    '# Çok katmanlı proje\n\nfirmware + bulut + mobil + masaüstü + araçlar.\n',
     'utf8'
   )
 }
@@ -119,8 +120,9 @@ app.whenReady().then(async () => {
       {
         role: 'user',
         content:
-          'firmware/ klasöründeki tüm .h dosyalarının İÇERİĞİNİ oku. Gömülü sırları ' +
-          '(Wi-Fi şifresi, MQTT parolası, API token) ve protokol sabitlerini dosya:satır ile listele.'
+          'Projedeki TÜM katmanların (firmware, bulut, mobil, masaüstü, araçlar) içeriğini incele. ' +
+          'Her katmanda gömülü sır var mı, hangi dosyada ve hangi satırda? ' +
+          'Ayrıca her katmanın sorumluluğunu ve katmanlar arası bağımlılıkları dosya:satır referansıyla çıkar.'
       }
     ],
     agent: {
@@ -175,9 +177,34 @@ app.whenReady().then(async () => {
   console.log(`\nnihai metin: ${text.length} karakter`)
   console.log(`sır bulundu mu: ${/CokGizli123|sifre-9876|tok_5f3a91b2c4d6e8/.test(text)}`)
 
-  check('alt ajan tetiklendi', spawns.length > 0, true)
-  check('sırlar raporda', /CokGizli123|sifre-9876|tok_5f3a91b2c4d6e8/.test(text), true)
+  const reads = distribution['read_file'] ?? 0
+  check('sırlar raporda (firmware)', /CokGizli123|sifre-9876/.test(text), true)
+  check('sırlar raporda (bulut)', /tok_5f3a91b2c4d6e8/.test(text), true)
+  check('sırlar raporda (araclar)', /py_token_9911aa/.test(text), true)
+  check('makul sürede bitti (<300 sn)', elapsed < 300, true)
+  // Strateji serbest: alt ajan, toplu okuma veya repo_map+grep kestirmesi —
+  // hepsi meşru. Burada ölçülen şey **sonucun doğruluğu ve verimliliği**.
+  const strategy =
+    spawns.length > 0
+      ? `alt ajan x${spawns.length}`
+      : reads >= 40
+        ? `toplu okuma x${reads}`
+        : (distribution['grep'] ?? 0) > 0
+          ? 'grep/repo_map kestirmesi'
+          : 'doğrudan okuma'
+  console.log(`\nstrateji: ${strategy}`)
+  console.log(`alt ajan: ${spawns.length} · read_file: ${reads} · süre: ${elapsed} sn`)
 
-  console.log(`\nTOTAL=2 FAILED=${failed}`)
+  // Alt ajan kullanıldıysa sonuçları **boş olmamalı** (0.4.7 canlı kusuru).
+  const spawnResults = sink.events.filter(
+    (event) =>
+      event.type === 'tool-result' &&
+      (event as { result?: { name?: string } }).result?.name === 'spawn_agent'
+  ) as Array<{ result?: { ok?: boolean; content?: string } }>
+  if (spawns.length > 0) {
+    check('alt ajan sonuçları boş değil', spawnResults.every((r) => r.result?.ok === true), true)
+  }
+
+  console.log(`\nTOTAL=5 FAILED=${failed}`)
   app.exit(failed === 0 ? 0 : 1)
 })

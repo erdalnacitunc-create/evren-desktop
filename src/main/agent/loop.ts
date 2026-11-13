@@ -23,6 +23,10 @@ import { createTools } from './tools'
 import { unknownToolMessage } from './toolSuggest'
 import { createSubagentGate, limitMessage } from './subagentLimit'
 import {
+  conflictMessage,
+  createOwnershipTable
+} from './fileOwnership'
+import {
   WEB_RESEARCH_HINT,
   emptyExplorationState,
   emptyWebResearchState,
@@ -289,6 +293,15 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   // Alt ajan kapısı: eşzamanlılık + istek başına bütçe.
   // 0.4.5'e kadar sınırsızdı; model kaç kez çağırırsa o kadar koşu açılıyordu.
   const subagentGate = createSubagentGate()
+  /**
+   * Dosya sahipliği tablosu.
+   *
+   * Yazma yapan alt ajanlar `files` listesiyle hangi yollara dokunacaklarını
+   * bildirir. İki ajana aynı dosya verilmez; araç katmanı da liste dışına
+   * yazmayı reddeder. Böylece worktree'nin çözdüğü çakışma sorunu, worktree
+   * maliyeti olmadan çözülür (bkz. docs/WORKTREE-DECISION.md).
+   */
+  const ownership = createOwnershipTable()
   /** Bu istekte açılan alt ajan görevleri (yinelenen işi engellemek için). */
   const spawnedPrompts: string[] = []
 
@@ -296,7 +309,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     agentType: 'explore' | 'review' | 'general',
     prompt: string,
     childController: AbortController,
-    subagentTaskId?: string
+    subagentTaskId?: string,
+    ownedFiles?: string[]
   ): Promise<{
     ok: boolean
     content: string
@@ -316,6 +330,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       workspaceRoot,
       sessionId: payload.sessionId,
       subagentTaskId,
+      ownedFiles,
       mode,
       profile,
       permissions: settings.permissions,
@@ -328,7 +343,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     spawn: async (
       agentType: 'explore' | 'review' | 'general',
       prompt: string,
-      background: boolean
+      background: boolean,
+      files?: string[]
     ) => {
       // Aynı işi iki kez açmayı engelle. Canlı koşularda modeller bazen
       // neredeyse aynı görevi iki kez başlatıyordu; bu hem token hem süre
@@ -344,6 +360,30 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       }
       spawnedPrompts.push(prompt)
 
+      // Dosya sahipliği: yazma yapacak ajan yollarını bildirmek zorunda.
+      // Çakışma varsa spawn reddedilir — çakışma *tespit edilmez*, imkânsız olur.
+      //
+      // Bu doğrulama kapıdan ÖNCE yapılır. Kapı (`acquire`) slot ve bütçe
+      // ayırır; doğrulama kapıdan sonra yapılırsa reddedilen spawn'lar slot
+      // sızdırır ve meşru spawn'lar kuyrukta bekler. 0.4.13'te tam bu oldu:
+      // files'sız bir general, kapasitenin yarısını kalıcı olarak tuttu.
+      const ownedFiles = Array.isArray(files)
+        ? files.map((value) => String(value)).filter(Boolean)
+        : []
+      const needsOwnership = agentType === 'general'
+      if (needsOwnership && ownedFiles.length === 0) {
+        // Yazma yapan ajan dosya bildirmezse sahiplik kurulamaz; iki general
+        // ajanı aynı dosyaya yazabilir. Bunu spawn anında söylemek, sonradan
+        // kaybolan değişiklikten iyidir.
+        return {
+          ok: false,
+          content:
+            'Yazma yapan alt ajan (general) için `files` listesi gerekli. ' +
+            'Bu ajanın yazacağı dosya/dizinleri ver (ör. ["src/auth/"]). ' +
+            'Okuma için explore/review kullan; onlarda files gerekmez.'
+        }
+      }
+
       // Bütçe ve eşzamanlılık kapısı. Reddedilirse modele net bir açıklama
       // döner: yeniden denemek yerine elindekiyle devam etmeli.
       try {
@@ -354,9 +394,32 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         return { ok: false, content }
       }
 
+      // Buradan sonraki her erken çıkış kapıyı geri vermek zorunda.
+      let claimId: string | null = null
+      if (needsOwnership && ownedFiles.length > 0) {
+        // Kimliği ÖNCEDEN üret: aksi hâlde tablodan geri okumak gerekir ve
+        // paralel spawn'larda yanlış kaydı bulabilir.
+        claimId = `own-${randomUUID()}`
+        const claim = ownership.claim({ id: claimId, agentType, paths: ownedFiles })
+        if (!claim.ok) {
+          log.warn(`Dosya sahipliği çakışması: ${claim.conflicts.length} yol`)
+          claimId = null
+          // Hiç koşmadı: slot ve bütçe iade edilir, aksi hâlde çakışma denemesi
+          // de bütçe yakardı.
+          subagentGate.refund(requestId)
+          return { ok: false, content: conflictMessage(claim.conflicts) }
+        }
+      }
+
       if (!background) {
         try {
-          const result = await executeSubagent(agentType, prompt, controller)
+          const result = await executeSubagent(
+            agentType,
+            prompt,
+            controller,
+            undefined,
+            needsOwnership ? ownedFiles : undefined
+          )
           // Kısmi sonuç açıkça etiketlenir: ana ajan tahmin etmek zorunda kalmasın.
           const marker = result.partial ? `[KISMİ — ${result.partialReason}]` : ''
           return {
@@ -367,12 +430,20 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           }
         } finally {
           subagentGate.release(requestId)
+          if (claimId) ownership.release(claimId)
         }
       }
 
       const taskId = `sub-${randomUUID()}`
       const childController = new AbortController()
-      const onParentAbort = (): void => childController.abort()
+      const onParentAbort = (): void => {
+        childController.abort()
+        // İptal edilen ajanın dosyaları hemen serbest kalsın; aksi hâlde
+        // ana ajan aynı dosyaları yeni bir ajana veremez.
+        if (claimId) {
+          ownership.release(claimId)
+        }
+      }
       controller.signal.addEventListener('abort', onParentAbort, { once: true })
       const info = createSubagentTask(
         {
@@ -388,7 +459,13 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       )
       send({ requestId, type: 'subagent-task', task: info })
 
-      void executeSubagent(agentType, prompt, childController, taskId)
+      void executeSubagent(
+        agentType,
+        prompt,
+        childController,
+        taskId,
+        needsOwnership ? ownedFiles : undefined
+      )
         .then((result) => {
           if (childController.signal.aborted) {
             updateSubagentTask(taskId, {
@@ -418,6 +495,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         .finally(() => {
           controller.signal.removeEventListener('abort', onParentAbort)
           subagentGate.release(requestId)
+          if (claimId) ownership.release(claimId)
         })
 
       return {
@@ -533,6 +611,9 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     'alt ajan sayısını **kapsama göre** seç: <15 dosya → 1, 15-60 → 2, daha büyükse 3-4. Hepsini birden başlatma; eşzamanlılık en fazla 2 olmalı (sağlayıcı ramp-rate limiti).' +
     '\n- **Web araştırmasında** 3+ bağımsız konu varsa (farklı teknoloji, farklı kaynak türü) → ' +
     '2-4 `explore` alt ajanı paralel; her birine farklı konu ve farklı kaynak türü ver.' +
+    '\n- **Paralel kodlama:** yazma yapacak ajana (general) mutlaka `files` ver. ' +
+    'Her ajana AYRI dosya kümesi: iki ajana aynı dosya verilmez (sistem reddeder). ' +
+    'Örnek: [{general, files:["src/auth/"]}, {general, files:["src/billing/"]}].' +
     '\n- Kod incelemesi veya risk taraması → `review` alt ajanı.' +
     '\n- Bağımsız, çok adımlı uygulama işi → `general` alt ajanı.' +
     '\n- Tek dosya, tek komut veya zaten bildiğin bir yerde arama → **devretme**, doğrudan yap.' +

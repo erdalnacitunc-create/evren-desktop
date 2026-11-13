@@ -22,6 +22,7 @@ import { BrowserSession } from './browser'
 import { runLighthouseAudit } from '../lighthouse'
 import { queryUsbInventory, runPythonScript, usbDeviceReport } from './hardware'
 import { clampSkillBody } from './skillCatalog'
+import { isWriteAllowed, writeBlockedMessage } from './fileOwnership'
 import {
   formatHits,
   parseBing,
@@ -198,6 +199,18 @@ async function applyFormatHook(path: string, enabled: boolean): Promise<string> 
   return `\n\nFormat hook: ${result.ok ? 'uygulandı' : 'hata'}\n${result.output}`.slice(0, 6000)
 }
 
+/**
+ * Yazma iznini doğrular. İzin listesi boşsa kısıt yok.
+ *
+ * Neden araç düzeyinde: istem kuralları modelin unutabileceği şeylerdir.
+ * Dosya sahipliği ise **garanti** olmalı — iki ajan aynı dosyaya yazarsa
+ * değişiklik sessizce kaybolur.
+ */
+function assertWriteAllowed(path: string, allowed: string[] | undefined): void {
+  if (isWriteAllowed(path, allowed)) return
+  throw new Error(writeBlockedMessage(path, allowed ?? []))
+}
+
 export function createTools(options: {
   browser: boolean
   computer: boolean
@@ -206,6 +219,14 @@ export function createTools(options: {
   pluginTools?: AgentPluginTool[]
   workspace?: { root: string; sessionId?: string }
   readOnly?: boolean
+  /**
+   * Bu ajanın yazabileceği yollar (dosya, dizin veya glob).
+   *
+   * Boş/verilmezse kısıt yok. Doluysa liste dışına yazma **araç düzeyinde**
+   * reddedilir. Dosya sahipliği tablosunun zorlayıcı tarafı budur: iki ajan
+   * aynı dosyaya yazamaz, çünkü ikisine de aynı yol verilmez.
+   */
+  allowedWritePaths?: string[]
   /** Düzenleme sonrası Prettier kancası. Ayar okuması çağıranda kalır. */
   formatOnEdit?: boolean
   /**
@@ -218,7 +239,8 @@ export function createTools(options: {
     spawn: (
       agentType: 'explore' | 'review' | 'general',
       prompt: string,
-      background: boolean
+      background: boolean,
+      files?: string[]
     ) => Promise<ToolExecutionResult>
     status: (taskId: string) => Promise<ToolExecutionResult>
     wait: (taskId: string, timeoutMs: number) => Promise<ToolExecutionResult>
@@ -230,6 +252,7 @@ export function createTools(options: {
   const browser = options.browser ? new BrowserSession() : null
   const workspaceRoot = options.workspace?.root ?? null
   const sessionId = options.workspace?.sessionId
+  const allowedWritePaths = options.allowedWritePaths
 
   for (const pluginTool of options.pluginTools ?? []) {
     if (pluginTool.meta === 'list') {
@@ -676,7 +699,9 @@ export function createTools(options: {
         'Ayrı bağlamda çalışan bir alt ajan başlatır. agent: explore (salt-okunur keşif), ' +
         'review (salt-okunur kod incelemesi), general (çalışma alanı araçlarıyla görev). ' +
         'background=true ise hemen görev kimliği döner; sonucu task_wait/task_status ile al. ' +
-        'Alt ajan yalnızca kısa bir sonuç döndürür.',
+        'Alt ajan yalnızca kısa bir sonuç döndürür. ' +
+        'YAZMA yapacak ajana (general) `files` ver: o ajan yalnızca o yollara yazabilir, ' +
+        'iki ajana aynı dosya verilemez.',
       parameters: {
         type: 'object',
         properties: {
@@ -692,6 +717,14 @@ export function createTools(options: {
           background: {
             type: 'boolean',
             description: 'true ise görev arka planda çalışır ve hemen task_id döner.'
+          },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Bu ajanın YAZABİLECEĞİ dosya/dizin/glob listesi. Yazma yapan ajanlar ' +
+              '(general) için zorunlu sayılır: iki ajana aynı dosya verilemez. ' +
+              'Örnek: ["src/auth/", "src/lib/token.ts"]. Okuma kısıtı yoktur.'
           }
         },
         required: ['agent', 'prompt']
@@ -705,7 +738,10 @@ export function createTools(options: {
         const type = agent === 'review' || agent === 'general' ? agent : 'explore'
         const prompt = str(args.prompt).trim()
         if (!prompt) throw new Error('Alt ajan görevi boş olamaz.')
-        return tasks.spawn(type, prompt, args.background === true)
+        const files = Array.isArray(args.files)
+          ? args.files.map((value) => String(value)).filter(Boolean)
+          : undefined
+        return tasks.spawn(type, prompt, args.background === true, files)
       }
     })
 
@@ -839,6 +875,7 @@ export function createTools(options: {
       summary: (args) => `Dosya yaz: ${str(args.path)} (${Buffer.byteLength(str(args.content), 'utf8')} b)`,
       execute: async (args, ctx) => {
         const content = str(args.content)
+        assertWriteAllowed(str(args.path), allowedWritePaths)
         const result = await writeWorkspaceFile(
           str(args.path),
           content,
@@ -872,6 +909,7 @@ export function createTools(options: {
       },
       summary: (args) => `Dosya düzenle: ${str(args.path)}`,
       execute: async (args, ctx) => {
+        assertWriteAllowed(str(args.path), allowedWritePaths)
         const result = await editWorkspaceFile(
           str(args.path),
           str(args.old_string),
@@ -902,6 +940,7 @@ export function createTools(options: {
       },
       summary: (args) => `Dosya sil: ${str(args.path)}`,
       execute: async (args, ctx) => {
+        assertWriteAllowed(str(args.path), allowedWritePaths)
         const result = await deleteWorkspaceFile(str(args.path), sessionId, ctx.checkpointId)
         return {
           ok: true,

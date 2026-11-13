@@ -188,6 +188,63 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.13 Beta — dosya sahipliği (Katman A)
+
+Paralel kodlama güvenli hâle geldi: **iki alt ajan aynı dosyaya yazamaz.**
+
+## Nasıl
+
+1. Ana ajan `spawn_agent` çağırırken `files` listesi verir (ajanın yazabileceği
+   dosya/dizin/glob'lar).
+2. Çakışan bir yol zaten sahipliyse spawn **reddedilir**; modele sahibi söylenir.
+3. Liste dışına yazma **araç düzeyinde** reddedilir — istem kuralı değil, kod
+   garantisi.
+
+Çakışma *tespit edilmez*, **imkânsız olur**. Ajanlar aynı ağaçta çalışır:
+`node_modules`, `.env`, `secrets.h`, `run_checks` yerinde kalır. Worktree'nin
+çözdüğü tek sorun buydu; worktree Katman B olarak opt-in kalıyor
+(`docs/WORKTREE-DECISION.md`: izlenen dosyaların yalnızca %2,3'ünü görür).
+
+Desenler: `src/a.ts` · `src/module/` · `src/**/*.ts`. İki desen yalnızca statik
+önekleri kesişiyorsa çakışır; `src/auth/` ile `src/billing/` birbirini engellemez.
+
+## Yol boyunca bulunan iki sessiz hata
+
+| Hata | Etki | Düzeltme |
+|---|---|---|
+| Kapı sızıntısı | Reddedilen spawn slotu geri vermiyordu; kapasite yarıya indi, ajanlar sırayla koştu, çakışma hiç oluşmadı | Doğrulama `acquire()`'dan önce; çakışma reddi `refund()` ile slot **ve** bütçe iadesi |
+| Alt ajan `tool-result` yok | Arayüz alt ajanın araç sonucunu göremiyordu; sahiplik ihlali görünmezdi | `ToolResultInfo` + her yolda sonuç yayını (`agentType`/`subagentTaskId` ile) |
+
+Kapı sızıntısı teşhisi: claim'ler 13 sn arayla alınıyordu — ajanlar paralel
+değil, sıraydı.
+
+## Canlı sınama (gerçek model, üretim yolu)
+
+6 dosyalı, iki bağımsız modüllü proje; görev iki `general` ajana bölündü.
+
+| | |
+|---|---|
+| Süre | **235 sn** |
+| `spawn_agent` | 2 (ikisi de kabul) |
+| Sahiplik | `["src/auth/"]` + `["src/billing/"]` — çakışma **0** |
+| Yazma | 6 |
+| Sonuç | 6/6 hata düzeltildi |
+
+Model `files` listesini kendiliğinden doğru verdi; hiçbir ajan diğerinin
+dosyasına dokunmadı.
+
+## Doğrulama
+
+| Paket | Kontrol | Kapsam |
+|---|---|---|
+| `file-ownership-test` | 52 | Normalizasyon, glob/dizin çakışması, tablo atomikliği, yazma izni |
+| `file-ownership-enforce-test` | 14 | Araç düzeyi zorlama (write/edit/delete) |
+| `file-ownership-loop-test` | 12 | Döngü: files zorunlu, çakışma reddi, kapı sızıntısı |
+| `agent-subagent-limit-test` | +4 | `refund()` slot ve bütçe iadesi |
+
+Toplam: **64 paket / 1511 kontrol** (önceki 61/1429). typecheck ✓ build ✓ e2e ✓
+Ayrıntı: `docs/RELEASE-0.4.13.md`.
+
 # 0.4.12 Beta — iki canlı sınama, web araştırma ipucu, kodlama devri analizi
 
 İki sorgu üretim yolundan (gerçek model, gerçek ağ/disk) çalıştırıldı ve canlı

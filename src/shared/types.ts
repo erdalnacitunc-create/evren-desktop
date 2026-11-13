@@ -378,6 +378,15 @@ export interface ToolResultInfo {
   imageDataUrl?: string
   checkpointId?: string
   todos?: TodoItem[]
+  /**
+   * Sonuç bir **alt ajan** tarafından üretildiyse türü.
+   * `tool-call` ile aynı alan: arayüz ve tanılama, alt ajanın hangi aracı
+   * hangi sonuçla kullandığını eşleştirebilsin. 0.4.13 öncesinde alt ajanlar
+   * `tool-call` yayınlıyor ama `tool-result` hiç yayınlamıyordu.
+   */
+  agentType?: SubagentType
+  /** Alt ajan görev kimliği. */
+  subagentTaskId?: string
 }
 
 export interface AgentApprovalRequest {

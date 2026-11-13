@@ -221,7 +221,28 @@ async function main(): Promise<void> {
     check('etkin 0', gate.snapshot().active, 0)
   }
 
-  console.log(`TOTAL=42 FAILED=${failed}`)
+  // ============ 14) İade (refund): reddedilen spawn iz bırakmaz ============
+  // 0.4.13'te canlı kusur: dosya sahipliği çakışmasıyla reddedilen spawn
+  // slotu geri vermiyordu; iki ret kapasitenin tamamını tutup meşru
+  // spawn'ları süresiz kuyrukta bıraktı.
+  {
+    const gate = createSubagentGate({ maxConcurrent: 2, maxPerRequest: 3 })
+    await gate.acquire('r')
+    check('slot alındı', gate.snapshot().active, 1)
+    check('bütçe tüketildi', gate.snapshot().used['r'], 1)
+
+    gate.refund('r')
+    check('iade slotu bıraktı', gate.snapshot().active, 0)
+    check('iade bütçeyi geri verdi', gate.snapshot().used['r'], undefined)
+
+    // İade sonrası bütçe yeniden tam kullanılabilir olmalı.
+    await gate.acquire('r')
+    await gate.acquire('r')
+    check('iki slot yeniden alındı', gate.snapshot().active, 2)
+    check('bütçe 2', gate.snapshot().used['r'], 2)
+  }
+
+  console.log(`TOTAL=46 FAILED=${failed}`)
   process.exit(failed === 0 ? 0 : 1)
 }
 

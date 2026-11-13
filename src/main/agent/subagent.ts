@@ -43,6 +43,11 @@ export interface SubagentOptions {
   approval?: (request: AgentApprovalRequest) => Promise<boolean>
   /** Görev kimliği: araç çağrılarını bu alt ajana atfetmek için. */
   subagentTaskId?: string
+  /**
+   * Bu ajanın yazabileceği yollar. Boşsa kısıt yok.
+   * Doluysa araç düzeyinde zorlanır — liste dışına yazma reddedilir.
+   */
+  ownedFiles?: string[]
 }
 
 /**
@@ -200,7 +205,12 @@ function parseArguments(raw: string): Record<string, unknown> {
   }
 }
 
-function agentInstruction(type: SubagentType, prompt: string, workspaceRoot: string | null): string {
+function agentInstruction(
+  type: SubagentType,
+  prompt: string,
+  workspaceRoot: string | null,
+  ownership: { readOnly: boolean; ownedFiles?: string[] }
+): string {
   const base =
     type === 'explore'
       ? 'Sen bir keşif alt ajanısın. Kod tabanını oku, ilgili dosyaları ve satırları bul, kanıtla birlikte kısa ve yoğun bir özet döndür. Dosya değiştirme.'
@@ -218,6 +228,17 @@ function agentInstruction(type: SubagentType, prompt: string, workspaceRoot: str
   // Çalışma alanı dışı: kullanıcı masaüstündeki bir klasörü sorduysa alt ajan
   // da `read_file` ile okuyamaz (kapsam koruması). Canlı koşuda bu yüzden
   // alt ajanlar PowerShell'e düşmek zorunda kaldı.
+  // Sahiplik: yazabilen ajana hangi dosyaların ait olduğunu söyle.
+  // Araç düzeyinde de zorlanır; bu yalnızca modelin boşa denemesini önler.
+  const ownershipNote =
+    !ownership.readOnly && ownership.ownedFiles && ownership.ownedFiles.length > 0
+      ? '\n\nDOSYA SAHİPLİĞİ: Yalnızca şu yollara yazabilirsin: ' +
+        (ownership.ownedFiles ?? []).join(', ') +
+        '.\nListe dışındaki bir dosyayı düzenlemen gerekirse DURDUR ve sonuçta ' +
+        '"şu dosya da gerekli" diye bildir. Kendi izin listeni genişletmeye çalışma; ' +
+        'araç reddeder. Diğer dosyaları **okuyabilirsin** (kısıt yok).'
+      : ''
+
   const outsideNote =
     workspaceRoot && /\b[A-Za-z]:\\/.test(prompt)
       ? '\n\nÇALIŞMA ALANI DIŞI: Görevdeki mutlak yollar çalışma alanının dışında olabilir. ' +
@@ -233,7 +254,7 @@ function agentInstruction(type: SubagentType, prompt: string, workspaceRoot: str
     '\n- Önce daralt: `grep`/`glob` ile ilgili dosyaları bul, sonra yalnızca gerekenleri oku.' +
     '\n- 5 adım içinde metin yazmaya başla; bulguları arada özetle.' +
     '\n- Rapor yazarken araç çağırma; elindekiyle bitir, eksikleri "doğrulanamadı" diye işaretle.'
-  return `${base}${workspace}${scope}${outsideNote}${efficiency}\n\nGörev:\n${prompt}\n\nYalnızca ana ajana dönük kısa bir sonuç üret; kullanıcıya doğrudan hitap etme. Gereksiz araç çıktısını tekrar etme.`
+  return `${base}${workspace}${ownershipNote}${scope}${outsideNote}${efficiency}\n\nGörev:\n${prompt}\n\nYalnızca ana ajana dönük kısa bir sonuç üret; kullanıcıya doğrudan hitap etme. Gereksiz araç çıktısını tekrar etme.`
 }
 
 export interface SubagentResult {
@@ -259,7 +280,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
     permissions,
     controller,
     send,
-    subagentTaskId
+    subagentTaskId,
+    ownedFiles
   } = options
 
   const skills = await loadEnabledSkills()
@@ -269,7 +291,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
     computer: false,
     skills,
     workspace: workspaceRoot ? { root: workspaceRoot, sessionId } : undefined,
-    readOnly
+    readOnly,
+    // Sahiplik listesi yalnızca yazabilen ajana anlamlı; salt-okunur ajanlara
+    // geçirilmez (onlar zaten yazamaz).
+    allowedWritePaths: readOnly ? undefined : ownedFiles
   })
 
   // Alt ajana da skill kataloğu verilir; gövde yüklemez, yalnızca göreve
@@ -284,7 +309,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
     {
       role: 'system',
       content:
-        agentInstruction(agentType, prompt, workspaceRoot) +
+        agentInstruction(agentType, prompt, workspaceRoot, { readOnly, ownedFiles }) +
         skillCatalog.text +
         buildSkillHint(routedForCatalog)
     },
@@ -433,6 +458,11 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         const permission = resolvePermission(permissions, mode, profile, category, resource)
         if (permission === 'deny') {
           const content = `Alt ajan için izin verilmedi (${category}).`
+          send({
+            requestId: parentRequestId,
+            type: 'tool-result',
+            result: { toolCallId: call.id, name: call.name, ok: false, content, agentType, subagentTaskId }
+          })
           messages.push({ role: 'tool', tool_call_id: call.id, content })
           continue
         }
@@ -461,6 +491,18 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
               })()
           if (!approved) {
             const content = 'Alt ajan eylemi kullanıcı tarafından reddedildi.'
+            send({
+              requestId: parentRequestId,
+              type: 'tool-result',
+              result: {
+                toolCallId: call.id,
+                name: call.name,
+                ok: false,
+                content,
+                agentType,
+                subagentTaskId
+              }
+            })
             messages.push({ role: 'tool', tool_call_id: call.id, content })
             continue
           }
@@ -485,11 +527,41 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             controller.signal,
             Math.min(TOOL_TIMEOUT_MS, remaining)
           )
+          // Sonucu yayınla. 0.4.13'e kadar alt ajan yalnızca `tool-call`
+          // gönderiyordu; arayüz ve testler sonucu hiç göremiyordu. Bu,
+          // dosya sahipliği ihlalinin görünmez kalmasına da yol açıyordu.
+          send({
+            requestId: parentRequestId,
+            type: 'tool-result',
+            result: {
+              toolCallId: call.id,
+              name: call.name,
+              ok: execution.ok,
+              content: execution.content,
+              imageDataUrl: execution.imageDataUrl,
+              checkpointId: execution.checkpointId,
+              todos: execution.todos,
+              agentType,
+              subagentTaskId
+            }
+          })
           messages.push({ role: 'tool', tool_call_id: call.id, content: execution.content })
         } catch (error) {
           const content = `Alt ajan araç hatası: ${
             error instanceof Error ? error.message : String(error)
           }`
+          send({
+            requestId: parentRequestId,
+            type: 'tool-result',
+            result: {
+              toolCallId: call.id,
+              name: call.name,
+              ok: false,
+              content,
+              agentType,
+              subagentTaskId
+            }
+          })
           messages.push({ role: 'tool', tool_call_id: call.id, content })
         }
       }

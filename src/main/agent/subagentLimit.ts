@@ -68,6 +68,14 @@ export interface SubagentGate {
   acquire: (requestId: string, signal?: AbortSignal) => Promise<void>
   /** Slotu bırakır; kuyruktaki ilk isteği çalıştırır. */
   release: (requestId: string) => void
+  /**
+   * Slotu bırakır **ve** istek bütçesini iade eder.
+   *
+   * Slot alındıktan sonra ajan hiç başlatılmadıysa (ör. dosya sahipliği
+   * çakışması) bütçe de geri verilmelidir; aksi hâlde başarısız denemeler
+   * meşru spawn'ların bütçesini yer.
+   */
+  refund: (requestId: string) => void
   snapshot: () => GateSnapshot
   /** Test için: tüm sayaçları sıfırlar. */
   reset: () => void
@@ -180,6 +188,14 @@ export function createSubagentGate(options: SubagentGateOptions = {}): SubagentG
     drain()
   }
 
+  const refund = (requestId: string): void => {
+    active = Math.max(0, active - 1)
+    const current = used.get(requestId) ?? 0
+    if (current <= 1) used.delete(requestId)
+    else used.set(requestId, current - 1)
+    drain()
+  }
+
   const snapshot = (): GateSnapshot => ({
     active,
     queued: queue.length,
@@ -197,7 +213,7 @@ export function createSubagentGate(options: SubagentGateOptions = {}): SubagentG
     }
   }
 
-  return { acquire, release, snapshot, reset }
+  return { acquire, release, refund, snapshot, reset }
 }
 
 /**

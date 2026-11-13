@@ -339,7 +339,11 @@ function resolveInside(root: string, relInput: string): string {
   const target = resolve(root, rel)
   const check = relative(root, target)
   if (check.startsWith('..') || isAbsolute(check)) {
-    throw new Error('Çalışma alanı dışına erişim engellendi.')
+    throw new Error(
+        'Çalışma alanı dışına erişim engellendi. ' +
+          'Çalışma alanı dışındaki dosyalar için run_command + mutlak yol kullan ' +
+          '(ör. Get-Content "C:\\proje\\dosya.md").'
+      )
   }
   return target
 }

@@ -1,3 +1,0 @@
-ca0a19ee51d45052c8598e616d07b80f75c456cb831759865e01f9a21f69bc44  EVREN-Desktop-0.4.10-portable-x64.zip
-8e61b96e77edb9e22f0efbc0ef01bfa24f10df7a201c03fa629ade43fafb55d3  EVREN-Desktop-Setup-0.4.10-x64.exe
-ce62bc6707d6547a2a8aa09e85c2af165f1f220e73987f05fd2d2c695ae86430  EVREN-Desktop-Setup-0.4.10-x64.exe.blockmap

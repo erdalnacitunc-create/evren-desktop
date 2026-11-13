@@ -98,6 +98,46 @@ const log = createLogger('agent/loop')
  * Skill yönlendiricisi ve triage bu metne bakar; araç sonuçları veya asistan
  * mesajları görev niyetini yansıtmaz.
  */
+/**
+ * Kullanıcı çalışma alanı **dışında** bir yol söylediyse modele kural ekler.
+ *
+ * Neden: `read_file`/`list_files`/`glob` kapsam dışına çıkamaz (güvenlik
+ * gereği — path traversal koruması). Model bunu bilmeyince hata alıp
+ * PowerShell'e düşüyor; içerik okuma dağınık ve pahalı oluyor.
+ *
+ * Tespit sezgiseldir: mutlak yol, sürücü harfi veya "masaüstü/desktop/masaüstünde"
+ * gibi ifadeler. Yanlış pozitif zararsız — yalnızca bir hatırlatma ekler.
+ */
+export function outsideWorkspaceHint(
+  workspaceRoot: string | null,
+  userText: string
+): string {
+  if (!workspaceRoot || !userText) return ''
+  // NOT: JavaScript'in `\b` sınırı ASCII tabanlıdır. `\bmasaüstü\b` ifadesi
+  // "masaüstü" ile BİTEN metinde eşleşmez (ü kelime karakteri olmadığı için
+  // sonda sınır oluşmaz). Bu yüzden Türkçe sözcüklerde `\b` yerine açık
+  // "harf değil" kontrolü kullanılır. Aynı tuzak memoryGuard'da da yaşandı.
+  const mentionsPath =
+    /[A-Za-z]:\\/.test(userText) ||
+    /\/(?:home|Users|mnt|opt)\//i.test(userText) ||
+    // Kök eşleşmesi: Türkçe çekim ekleri (`masaüstünde`, `belgelerim`) da
+    // yakalanmalı. Sadece **başlangıç** sınırı aranır, bitiş sınırı aranmaz.
+    /(^|[^\p{L}])(masaüst|masaust|desktop|belge|document|indirilen|download)/iu.test(
+      userText
+    )
+  if (!mentionsPath) return ''
+  return (
+    '\n\nÇALIŞMA ALANI DIŞI: Kullanıcı çalışma alanı dışında bir yol söyledi. ' +
+    'read_file, list_files, glob, grep ve write_file yalnızca çalışma alanı içinde çalışır ' +
+    '(kapsam dışına erişim güvenlik gereği engellenir). ' +
+    'Çalışma alanı dışındaki dosyaları okumak için **run_command** kullan ve **mutlak yol** ver. ' +
+    'Örnek: run_command { "command": "Get-ChildItem -Recurse \"C:\\proje\" -File | Select-Object FullName" } ' +
+    'veya içerik için { "command": "Get-Content \"C:\\proje\\README.md\" -Encoding UTF8" }. ' +
+    'Bu durumda read_file denemeyin; doğrudan run_command ile ilerleyin. ' +
+    'Kullanıcı bu klasörü çalışma alanı yapmak isterse "Klasör Seç" ile seçebilir.'
+  )
+}
+
 function lastUserTextOf(messages: Array<{ role: string; content: unknown }>): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
@@ -448,13 +488,19 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       `Skill kataloğu bütçeye kısıldı: ${skillCatalog.included} dahil, ${skillCatalog.omitted} dışarıda`
     )
   }
+  // Çalışma alanı dışındaki yollar: canlı koşuda model `read_file` ile
+  // kullanıcının masaüstündeki projeyi okumaya çalıştı, araç kapsam dışına
+  // çıkamadığı için hata aldı ve PowerShell'e düşmek zorunda kaldı. Bu kural
+  // o geçişi baştan açıklar.
+  const outsideHint = outsideWorkspaceHint(workspaceRoot, lastUserTextOf(messages))
   const workspaceSection = workspaceRoot
     ? `\n\nÇalışma alanı: ${workspaceRoot}\n` +
       'Dosya oluşturmak, okumak, düzenlemek, silmek ve komut çalıştırmak için ' +
       'read_file, write_file, edit_file, delete_file, create_directory, list_files, glob, grep, run_command, run_checks, repo_map, code_search ve git araçlarını kullan. ' +
       'Yollar çalışma alanına göreli olmalı. Bir dosyayı düzenlemeden önce read_file ile oku; ' +
       'küçük değişikliklerde write_file yerine edit_file kullan. Dosya içeriğini sohbete kod bloğu olarak dökme; gerçek dosyayı araçla oluştur. ' +
-      'Düzenleme sonrası projede tanımlıysa run_checks ile typecheck/lint/test çalıştır. Git işlemleri için git aracını kullan.'
+      'Düzenleme sonrası projede tanımlıysa run_checks ile typecheck/lint/test çalıştır. Git işlemleri için git aracını kullan.' +
+      outsideHint
     : ''
   const planSection =
     profile === 'plan'

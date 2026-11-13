@@ -65,6 +65,7 @@ const SUITES = [
   { file: 'scripts/agent-fanout-test.ts', label: 'Kademeli fan-out planı', fast: true },
   { file: 'scripts/agent-fanout-e2e-test.ts', label: 'Kademeli fan-out uçtan uca' },
   { file: 'scripts/websearch-parse-test.ts', label: 'Web arama ayrıştırma', fast: true },
+  { file: 'scripts/outside-workspace-hint-test.ts', label: 'Çalışma alanı dışı ipucu', fast: true },
   { file: 'scripts/agent-loop-test.ts', label: 'Ajan döngüsü (uçtan uca)' },
   { file: 'scripts/max-steps-test.ts', label: 'Adım sınırı davranışı' },
   { file: 'scripts/continuation-test.ts', label: 'Kesilen yanıtı sürdürme' },

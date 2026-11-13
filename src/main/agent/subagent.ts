@@ -182,6 +182,18 @@ function agentInstruction(type: SubagentType, prompt: string, workspaceRoot: str
   // Canlı koşuda ajanlar 3 GB'lık master\ ve mobil\ dizinlerinde
   // node_modules/build içine girip "kısmi" rapor döndürdü.
   const scope = scopeBriefing(planFanout())
+
+  // Çalışma alanı dışı: kullanıcı masaüstündeki bir klasörü sorduysa alt ajan
+  // da `read_file` ile okuyamaz (kapsam koruması). Canlı koşuda bu yüzden
+  // alt ajanlar PowerShell'e düşmek zorunda kaldı.
+  const outsideNote =
+    workspaceRoot && /\b[A-Za-z]:\\/.test(prompt)
+      ? '\n\nÇALIŞMA ALANI DIŞI: Görevdeki mutlak yollar çalışma alanının dışında olabilir. ' +
+        'read_file/list_files/glob/grep yalnızca çalışma alanı içinde çalışır. ' +
+        'Dışarıdaki dosyalar için **run_command** kullan ve **mutlak yol** ver ' +
+        '(ör. Get-Content "C:\\proje\\dosya.md" -Encoding UTF8). ' +
+        'read_file denemeyin.'
+      : ''
   const efficiency =
     '\n\nVERİMLİLİK:' +
     '\n- Aynı adımda birden çok dosyayı oku: tek yanıtta birden fazla `read_file` çağrısı yap (paralel araç çağrısı). ' +
@@ -189,7 +201,7 @@ function agentInstruction(type: SubagentType, prompt: string, workspaceRoot: str
     '\n- Önce daralt: `grep`/`glob` ile ilgili dosyaları bul, sonra yalnızca gerekenleri oku.' +
     '\n- 5 adım içinde metin yazmaya başla; bulguları arada özetle.' +
     '\n- Rapor yazarken araç çağırma; elindekiyle bitir, eksikleri "doğrulanamadı" diye işaretle.'
-  return `${base}${workspace}${scope}${efficiency}\n\nGörev:\n${prompt}\n\nYalnızca ana ajana dönük kısa bir sonuç üret; kullanıcıya doğrudan hitap etme. Gereksiz araç çıktısını tekrar etme.`
+  return `${base}${workspace}${scope}${outsideNote}${efficiency}\n\nGörev:\n${prompt}\n\nYalnızca ana ajana dönük kısa bir sonuç üret; kullanıcıya doğrudan hitap etme. Gereksiz araç çıktısını tekrar etme.`
 }
 
 export interface SubagentResult {

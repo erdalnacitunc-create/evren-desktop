@@ -188,160 +188,127 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-# 0.4.10 Beta — web araması düzeltildi, alt ajan gözlemlenebilirliği
+# 0.4.11 Beta — çalışma alanı dışı yollar ve Türkçe sınır hatası
 
-Web sorgusuyla alt ajan sistemini sınadım. **İki gerçek kusur** çıktı.
+0.4.10'daki plc_proje koşunuzu inceledim. **Sonuç en iyisiydi**, ama bir kusur
+çıktı.
 
-## Kusur 1: `websearch` tamamen bozuktu
+## Koşu sonuçları: en hızlı ve en temiz
 
-Ölçüm: "Electron utilityProcess documentation" araması **WhatsApp indirme
-linkleri** döndürdü.
+| Sürüm | Süre | Retry | Araç | Alt ajan | Rapor |
+|---|---|---|---|---|---|
+| 0.4.7 | 21 dk | 4 | 15 | 4 (hepsi boş) | 10 080 kr |
+| 0.4.8 | 13 dk | 11 | 12 | 4 (hepsi kısmi) | 6 827 kr |
+| **0.4.10** | **5,6 dk** | **0** | **8** | 0 | 3 827 kr |
 
-Kök neden ölçüldü:
+**%73 daha hızlı, sıfır retry.** Model bu kez alt ajan kullanmadı ve doğru
+kararı verdi: 8 `run_command` ile yapıyı çıkardı, 5,6 dakikada bitirdi.
+Devretmek bu iş için gereksizdi.
 
-```
-GET bing.com/search?q=Electron+utilityProcess+documentation
-→ HTTP 200, 97 KB HTML
-→ <li class="b_algo"> sayısı: 0
-→ <h2> sayısı: 0
-```
+Rapor kalitesi de arttı — model neyi **doğrulamadığını** açıkça yazdı:
 
-Yani ayrıştırıcı bozuk değildi; **Bing otomatik isteklere sonuç sayfası
-vermiyor**. Sayfada yalnızca reklam/navigasyon blokları kalıyor, ayrıştırıcı
-da onları sonuç sanıyor.
+> **Doğrulanamayanlar (içerik okuması yapılmadı)**
+> Bu özet dizin yapısı, dosya adları, boyutlar, git geçmişi ve dal adları
+> üzerinden çıkarıldı. Şunlar içerikten teyit edilmedi: firmware'de gömülü
+> Wi-Fi/MQTT/API kimlik bilgisi olup olmadığı, `araclar/.env_ornek` içeriği,
+> `supabase/migrations` şema detayları…
 
-### Sağlayıcı ölçümü (bu makine, 13 Kasım 2026)
+Ve devamında alt ajanı **kendisi önerdi**:
 
-| Sağlayıcı | Durum | Sonuç |
-|---|---|---|
-| **DuckDuckGo HTML** | 200, ~33 KB | **10 doğru sonuç** (electronjs.org) |
-| DuckDuckGo Lite | 200 | 0 sonuç (farklı DOM) |
-| Brave HTML | 429 | engellendi |
-| Wikipedia API | 200 | yalnızca ansiklopedik |
-| Bing HTML | 200 ama sonuçsuz | reklam blokları |
-| Google CSE | anahtar gerekir | anahtar varsa en iyi |
+> "İstersen bir sonraki adımda sır taraması, veri şeması çıkarımı ve Flutter
+> bağımlılık gruplarını **paralel alt ajanlarla** içerikten doğrulayabilirim."
 
-### Düzeltme
+Yani 0.4.5–0.4.9 arası yaptığımız devretme kuralları modele işlemiş.
 
-`src/main/agent/websearch.ts` — sağlayıcı **zinciri**:
+## Kusur: çalışma alanı dışındaki yollar
 
-```
-Google CSE (anahtar varsa) → DuckDuckGo → Bing (son çare)
-```
-
-- Her sağlayıcı sırayla denenir; biri boş dönerse sonrakine geçilir.
-- Hata mesajı hangi sağlayıcıların neden başarısız olduğunu listeler.
-- `EVREN_WEBSEARCH_PROVIDER` ile zorlanabilir.
-- Ayrıştırıcılar saf fonksiyon: `parseDuckDuckGo`, `parseBing`,
-  `parseGoogleCse`, `decodeDuckDuckGoRedirect`.
-
-Düzeltme sonrası aynı sorgu:
+Model bir kez `read_file` denedi ve hata aldı:
 
 ```
-Arama (DuckDuckGo): Electron utilityProcess documentation
-
-1. utilityProcess - Electron
-   https://www.electronjs.org/docs/latest/api/utility-process
-   utilityProcess creates a child process with Node.js and Message ports enabled…
+Araç hatası: ENOENT: no such file or directory, stat
+'C:\Users\erdal\AppData\Local\Temp\evren-workspaces\mwekjvxv-5e451733\00_genel_felsefe.md'
 ```
 
-## Kusur 2: alt ajanların araç çağrıları görünmüyordu
+Sebep: çalışma alanı **geçici klasördü**, kullanıcı ise masaüstündeki
+`plc_proje` klasörünü sordu. `read_file` göreli yolu çalışma alanına göre çözer
+ve **kapsam dışına çıkamaz** (path traversal koruması — bilinçli).
 
-Alt ajan yalnızca `tool-result` olayı yayınlıyordu, `tool-call` değil. Yani:
+Model PowerShell'e düşüp devam etti. Kayıp: 1 adım + dağınık çıktı. Daha
+önemlisi: model bunu **bilmiyordu**, deneyerek öğrendi.
 
-- Arayüz alt ajanın **ne yaptığını** gösteremiyordu
-- Testler hangi araçların kullanıldığını gözleyemiyordu
-- `session-events.jsonl` alt ajan araç çağrılarını kaçırıyordu
+### Düzeltme 1: istem baştan söylüyor
 
-Düzeltme: alt ajan artık `tool-call` yayınlıyor ve çağrıya `agentType` +
-`subagentTaskId` ekleniyor. Böylece hangi çağrının hangi ajana ait olduğu
-görünüyor.
-
-## Sınamanın sonucu: web üzerinde paralel alt ajanlar
-
-Üç alt ajan, üç ayrı konu, paralel (gerçek model, gerçek ağ):
-
-| Ajan | Süre | Kullandığı araçlar | Birincil kaynak |
-|---|---|---|---|
-| electron | ~70 sn | `websearch`, `webfetch` | electronjs.org |
-| sqlite | ~60 sn | `websearch`, `webfetch` | sqlite.org |
-| rust | 36 sn | `websearch`, `webfetch` | doc.rust-lang.org |
-
-Toplam paralel süre: **86 saniye**.
-
-**Kaynak çeşitliliği doğrulandı:**
+Kullanıcı metninde çalışma alanı dışı bir yol geçiyorsa (sürücü harfi,
+`/home/...`, "masaüstü", "belgeler", "indirilenler"…) sistem istemine eklenir:
 
 ```
-kaynak alan adları: electronjs.org, releases.electronjs.org, github.com,
-                    sqlite.org, doc.rust-lang.org
+ÇALIŞMA ALANI DIŞI: Kullanıcı çalışma alanı dışında bir yol söyledi.
+read_file, list_files, glob, grep ve write_file yalnızca çalışma alanı içinde
+çalışır (kapsam dışına erişim güvenlik gereği engellenir).
+Çalışma alanı dışındaki dosyaları okumak için run_command kullan ve mutlak yol
+ver. Örnek: Get-Content "C:\proje\README.md" -Encoding UTF8.
+read_file denemeyin; doğrudan run_command ile ilerleyin.
 ```
 
-Hiçbir URL tekrar etmiyor, her ajan kendi konusunda kaldı, çapraz kirlenme yok
-(electron ajanı WAL'dan, sqlite ajanı Clone'dan hiç bahsetmedi).
+Alt ajanlar için aynı not, görev metninde mutlak yol varsa eklenir.
 
-## Sorunuzun cevabı: ajanlar birbirinden haberdar DEĞİL
+### Düzeltme 2: hata mesajı eyleme dönük
 
-Bu **tasarım gereği** ve testle sabitlendi:
-
-> Her alt ajan yalnızca kendi istemini ve kendi araç çıktısını görür.
-> Paylaşılan bağlam yok.
-
-Neden:
-
-1. **Cognition ilkesi** — paylaşılan bağlam, ajanların örtük kararlarını
-   çelişkili hâle getirir; birleştirme kurtarılamaz (Flappy Bird örneği).
-2. **Bağlam izolasyonu** — alt ajanın varlık sebebi, ana bağlamı
-   kirletmeden çalışması. Ajanlar birbirinin bulgularını görseydi, her biri
-   diğerinin bağlamını da taşımak zorunda kalırdı (N ajan = N² bağlam).
-3. **Ölçüm** — bu testte her ajanın "gördüğü" metin denetlendi: hiçbiri
-   diğerinin konusunu içermiyor.
-
-Peki "haberdar" olmadan farklı kaynaklara nasıl gidiyorlar? **Ana ajan
-görevleri bölerken** farklı kaynak/alan atadığı için. Bu, merkezî
-koordinasyon; ajanlar arası iletişim değil.
-
-## İsterseniz eklenebilecek: paylaşılan bulgu panosu
-
-Ajanların birbirini görmesi *istenirse* doğru yol, doğrudan bağlam paylaşımı
-değil **yapısal pano**:
-
+Önce: `Çalışma alanı dışına erişim engellendi.`
+Sonra:
 ```
-reconBoard.write(taskId, { url, claim, evidence })
-reconBoard.read(exceptOwn)   // yalnızca URL + tek satır iddia
+Çalışma alanı dışına erişim engellendi. Çalışma alanı dışındaki dosyalar için
+run_command + mutlak yol kullan (ör. Get-Content "C:\proje\dosya.md").
 ```
 
-- Yalnızca **URL + tek satır iddia** paylaşılır (tam bağlam değil)
-- Ajan kendi bulgusunu yazmadan önce panoyu okur: "bu kaynağa başkası gitti"
-- Kaynak tekrarı biter, bağlam şişmez
+Böylece model hatayı görünce ne yapacağını biliyor — deneme yanılma yok.
 
-Bu, Cognition'ın itirazını (örtük karar paylaşımı) ihlal etmez çünkü paylaşılan
-şey *karar* değil *kaynak işareti*. Maliyeti düşük, faydası ölçülebilir.
+## Yan bulgu: Türkçe `\b` tuzağı tekrar çıktı
 
-**Şu an eklemedim** — çünkü mevcut testte kaynak tekrarı zaten yoktu (0 tekrar
-URL). Pano ancak tekrar gözlemlenirse gerekli.
+Yol tespiti ilk yazdığımda `\bmasaüstü\b` kullandım. **"masaüstü" ile biten
+metinde eşleşmedi** — çünkü `ü` JavaScript'te kelime karakteri değil, dolayısıyla
+sonda sözcük sınırı oluşmuyor.
+
+Bu tuzağı 0.4.2'de hafıza sınıflandırıcısında yaşamıştık; aynı hata başka bir
+modülde tekrar etti. Çözüm: Türkçe sözcüklerde `\b` yerine **kök eşleşmesi**
+(`masaüst`, `belge`, `indirilen`) — çekim eklerini de yakalar.
+
+## Google araması sorusuna cevap
+
+**Şu an Google kullanılmıyor.** Kod Google CSE'yi destekliyor ama iki anahtar
+gerekiyor ve bunlar tanımlı değil:
+
+```
+GOOGLE_CSE_API_KEY: YOK
+GOOGLE_CSE_ID:      YOK
+etkin zincir:       duckduckgo → bing
+gerçek arama:       Arama (DuckDuckGo): "OpenSSL 3.5 release notes" · 5 sonuç
+```
+
+Tanımlanırsa zincir otomatik `google → duckduckgo → bing` olur. Anahtarlar
+şu an **yalnızca ortam değişkeni** olarak okunuyor; arayüzde alan yok ve
+uygulama ortam değişkenlerini kendi başlatmıyor. Bu bir sonraki adım olabilir
+(ayarlar ekranına "Google Custom Search" alanı).
 
 ## Doğrulama
 
 | Paket | Kontrol | Kapsam |
 |---|---|---|
-| `websearch-parse-test` | 46 | DDG/Bing/Google ayrıştırma, yönlendirme çözümü, sağlayıcı sırası |
-| `agent-live-web-test` | 12 | Gerçek ağ: 3 paralel ajan, kaynak çeşitliliği, haberdarlık |
+| `outside-workspace-hint-test` | 19 | Yol tespiti, Türkçe kök eşleşmesi, metin kalitesi |
 
-Toplam: **59 paket / 1388 kontrol** (önceki 58/1342). typecheck ✓ build ✓ e2e ✓
+Toplam: **60 paket / 1407 kontrol** (önceki 59/1388). typecheck ✓ build ✓ e2e ✓
 
-`agent-live-web-test` gerçek ağa çıktığı için `test:unit` dışında:
+## Sizin bir sonraki sınamanız
 
-```bash
-node scripts/run-unit.cjs scripts/agent-live-web-test.ts
-```
+0.4.11'de aynı sorgu şunu yapmalı:
 
-## Bilinen sınırlar
+1. `read_file` denemeden doğrudan `run_command` + mutlak yol
+2. Aynı hız (5-6 dk) veya daha iyi
+3. Kayıp adım olmaması
 
-- DuckDuckGo HTML arayüzü resmî API değil; DOM değişirse ayrıştırıcı kırılır.
-  Bu yüzden zincir var ve hata mesajı hangi sağlayıcının düştüğünü söylüyor.
-- Alt ajan `browser` aracını kullanmıyor (yalnızca `websearch`/`webfetch`).
-  JS gerektiren sayfalar `webfetch` ile okunamaz.
-- Sayfa başına içerik sınırı webfetch'te mevcut; çok büyük sayfalar kesilir.
+İsterseniz ikinci adımda modelin önerdiği üçlüyü çalıştırın — sır taraması,
+şema çıkarımı, Flutter bağımlılıkları — bu kez alt ajanlar gerçekten iş
+yapacak ve 0.4.6–0.4.9 zincirini uçtan uca sınamış oluruz.
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.
 İmzalama seçenekleri (yeniden başvuru veya ticari sertifika) ileride

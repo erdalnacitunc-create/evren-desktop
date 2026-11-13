@@ -15,6 +15,7 @@ import type {
 import { approvalKey, waitForApproval } from './approval'
 import { createTools } from './tools'
 import { unknownToolMessage } from './toolSuggest'
+import { listWorkspaceChanges } from '../workspace'
 import { planFanout, scopeBriefing } from '../../shared/agentFanout'
 import { buildSkillCatalog, buildSkillHint, routeSkills } from './skillCatalog'
 import {
@@ -108,6 +109,37 @@ async function runToolWithTimeout<T>(
   } finally {
     clearTimeout(timer)
     parentSignal.removeEventListener('abort', onParentAbort)
+  }
+}
+
+/**
+ * Alt ajanın değiştirdiği dosyaları kısa bir listeye çevirir.
+ *
+ * `general` ajanı yazabildiği için ana ajanın ne değiştiğini bilmesi gerekir;
+ * aksi hâlde kodlama devri "kara kutu" olur (Cognition'ın uyardığı görünürsüzlük).
+ */
+async function changedFilesReport(before: number): Promise<string> {
+  try {
+    const changes = await listWorkspaceChanges(500)
+    const fresh = changes.slice(0, Math.max(0, changes.length - before))
+    if (fresh.length === 0) return ''
+    const lines = fresh
+      .slice(0, 20)
+      .map((change) => {
+        const action =
+          change.action === 'write'
+            ? 'yazıldı'
+            : change.action === 'edit'
+              ? 'düzenlendi'
+              : change.action === 'delete'
+                ? 'silindi'
+                : change.action
+        return `- ${change.path} (${action})`
+      })
+      .join('\n')
+    return `\n\nDeğişen dosyalar (${fresh.length}):\n${lines}`
+  } catch {
+    return ''
   }
 }
 
@@ -260,6 +292,21 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
   ]
   const request: ChatRequest = { model, messages }
   const startedAt = Date.now()
+  /**
+   * Yazma yetkili alt ajan (general) hangi dosyaları değiştirdi?
+   *
+   * Neden: alt ajan sonucu yalnızca metin döndürüyordu. Ana ajan, general
+   * ajanın hangi dosyalara dokunduğunu göremiyordu — kodlama devrinde bu
+   * ciddi bir görünürsüzlük. Artık değişen dosyalar sonuca eklenir.
+   */
+  let changesBefore = 0
+  if (!readOnly && workspaceRoot) {
+    try {
+      changesBefore = (await listWorkspaceChanges(500)).length
+    } catch {
+      changesBefore = 0
+    }
+  }
   let toolCallCount = 0
   let finalContent = ''
   /** İlerlemesiz adım koruması: ana döngüdeki progressGuard'ın alt ajan sürümü. */
@@ -282,9 +329,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           tools: registry.definitions(),
           reason: 'deadline'
         })
+        const changedDeadline = readOnly ? '' : await changedFilesReport(changesBefore)
         return {
           ok: true,
-          content: synthesized.slice(0, 12_000),
+          content: (synthesized + changedDeadline).slice(0, 12_000),
           partial: true,
           partialReason: 'deadline'
         }
@@ -311,9 +359,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       if (result.content) finalContent = result.content
 
       if (result.toolCalls.length === 0) {
+        const changed = readOnly ? '' : await changedFilesReport(changesBefore)
         return {
           ok: true,
-          content: (finalContent || 'Alt ajan bir sonuç üretmedi.').slice(0, 12_000)
+          content: ((finalContent || 'Alt ajan bir sonuç üretmedi.') + changed).slice(0, 12_000)
         }
       }
 
@@ -341,9 +390,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             tools: registry.definitions(),
             reason: 'tools'
           })
+          const changedTools = readOnly ? '' : await changedFilesReport(changesBefore)
           return {
             ok: true,
-            content: synthesized.slice(0, 12_000),
+            content: (synthesized + changedTools).slice(0, 12_000),
             partial: true,
             partialReason: 'tools'
           }
@@ -468,9 +518,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       tools: registry.definitions(),
       reason: 'steps'
     })
+    const changedSteps = readOnly ? '' : await changedFilesReport(changesBefore)
     return {
       ok: true,
-      content: synthesized.slice(0, 12_000),
+      content: (synthesized + changedSteps).slice(0, 12_000),
       partial: true,
       partialReason: 'steps'
     }

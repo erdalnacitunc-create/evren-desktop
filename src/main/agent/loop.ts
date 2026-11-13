@@ -23,9 +23,12 @@ import { createTools } from './tools'
 import { unknownToolMessage } from './toolSuggest'
 import { createSubagentGate, limitMessage } from './subagentLimit'
 import {
+  WEB_RESEARCH_HINT,
   emptyExplorationState,
+  emptyWebResearchState,
   explorationHintMessage,
   shouldHintExploration,
+  shouldHintWebResearch,
   updateExploration
 } from './explorationHint'
 import {
@@ -528,6 +531,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     '\n- İÇERİK doğrulaması gerekiyorsa ve dosya sayısı 5\'ten fazlaysa (sır taraması, ' +
     'protokol alanları, gerçek bağımlılıklar, "tüm çağrı yerleri", fonksiyon davranışı) → ' +
     'alt ajan sayısını **kapsama göre** seç: <15 dosya → 1, 15-60 → 2, daha büyükse 3-4. Hepsini birden başlatma; eşzamanlılık en fazla 2 olmalı (sağlayıcı ramp-rate limiti).' +
+    '\n- **Web araştırmasında** 3+ bağımsız konu varsa (farklı teknoloji, farklı kaynak türü) → ' +
+    '2-4 `explore` alt ajanı paralel; her birine farklı konu ve farklı kaynak türü ver.' +
     '\n- Kod incelemesi veya risk taraması → `review` alt ajanı.' +
     '\n- Bağımsız, çok adımlı uygulama işi → `general` alt ajanı.' +
     '\n- Tek dosya, tek komut veya zaten bildiğin bir yerde arama → **devretme**, doğrudan yap.' +
@@ -702,6 +707,10 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     /** Keşif ipucu durumu: listeleme/okuma oranı. */
     let exploration = emptyExplorationState()
     let explorationHintsSent = 0
+    /** Web araştırması: sıralı aramaları paralel alt ajana yönlendirmek için. */
+    let webResearch = emptyWebResearchState()
+    let webHintsSent = 0
+    let subagentsSpawned = 0
 
     for (let step = 0; ; step++) {
       if (controller.signal.aborted) {
@@ -937,6 +946,12 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             ok: execution.ok,
             content: execution.content
           })
+          // Web araştırması sayacı: 3+ arama paralel alt ajana uygun olabilir.
+          if (execution.ok) {
+            if (call.name === 'websearch') webResearch.searches += 1
+            if (call.name === 'webfetch') webResearch.fetches += 1
+          }
+          if (call.name === 'spawn_agent' && execution.ok) subagentsSpawned += 1
 
           if (execution.imageDataUrl) {
             messages.push({
@@ -982,6 +997,16 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         log.warn(
           `Keşif ipucu: ${exploration.listedFiles} dosya listelendi, ` +
             `${exploration.readFiles} okundu — alt ajan önerildi`
+        )
+      }
+
+      // Web araştırması ipucu: sıralı aramalar paralel alt ajana uygun mu?
+      // Canlı koşuda 4 sıralı websearch 384 saniye sürdü.
+      if (subagentsSpawned === 0 && shouldHintWebResearch(webResearch, webHintsSent)) {
+        webHintsSent += 1
+        messages.push({ role: 'user', content: WEB_RESEARCH_HINT })
+        log.warn(
+          `Web araştırma ipucu: ${webResearch.searches} sıralı arama — paralel alt ajan önerildi`
         )
       }
 

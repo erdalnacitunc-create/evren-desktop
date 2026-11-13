@@ -136,6 +136,57 @@ export function shouldHintExploration(
   return ratio < maxRatio
 }
 
+// ---------------------------------------------------------------------------
+// Web araştırması ipucu
+// ---------------------------------------------------------------------------
+
+/**
+ * Web araştırması durumu.
+ *
+ * Canlı koşuda (0.4.11, web sorgusu) model **4 websearch** çağrısını sırayla
+ * yaptı: 384 saniye. Bu aramalar birbirinden bağımsızdı ve paralel
+ * çalıştırılabilirdi. Dosya keşfi için ipucu vardı, web için yoktu.
+ */
+export interface WebResearchState {
+  searches: number
+  fetches: number
+}
+
+export function emptyWebResearchState(): WebResearchState {
+  return { searches: 0, fetches: 0 }
+}
+
+/**
+ * Web araması ipucu verilmeli mi?
+ *
+ * Koşullar: en az `minSearches` (varsayılan 3) arama yapılmış ve ipucu hakkı
+ * kalmış. Tek arama normaldir; 3+ arama genellikle bağımsız konular demektir.
+ */
+export function shouldHintWebResearch(
+  state: WebResearchState,
+  hintsSent = 0,
+  maxHints = 1,
+  minSearches = 3
+): boolean {
+  if (hintsSent >= maxHints) return false
+  return state.searches >= Math.max(2, Math.round(minSearches))
+}
+
+export const WEB_RESEARCH_HINT = [
+  "DURUM: Birkaç web aramasını sırayla yaptın.",
+  "",
+  "Bu aramalar birbirinden bağımsızsa paralel alt ajanlarla çok daha hızlı",
+  "tamamlanır:",
+  "- 2-4 `explore` alt ajanı başlat (`spawn_agent`, background=true)",
+  "- her birine FARKLI bir konu ve farklı kaynak türü ver",
+  "  (ör. resmî dokümantasyon, GitHub örnek projeler, teknik blog)",
+  "- istediğin çıktı biçimini ve kaynak URL zorunluluğunu görev metnine yaz",
+  "- sonuçları `task_wait` ile topla, sonra sentezle",
+  "",
+  "Aramalar birbirine bağlıysa (ikincisi birincinin bulgusuna dayanıyorsa)",
+  "bu ipucunu yok say ve doğrudan devam et."
+].join("\n")
+
 export const EXPLORATION_HINT = `DURUM: Birçok dosya listeledin ama içeriklerini okumadın.
 
 Dosya adı ve boyutu mimari hakkında yalnızca tahmin verir; sır, protokol alanı,

@@ -188,127 +188,152 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-# 0.4.11 Beta — çalışma alanı dışı yollar ve Türkçe sınır hatası
+# 0.4.12 Beta — iki canlı sınama, web araştırma ipucu, kodlama devri analizi
 
-0.4.10'daki plc_proje koşunuzu inceledim. **Sonuç en iyisiydi**, ama bir kusur
-çıktı.
+İki sorgu üretim yolundan (gerçek model, gerçek ağ/disk) çalıştırıldı ve canlı
+ölçüldü.
 
-## Koşu sonuçları: en hızlı ve en temiz
+## Sınama sonuçları
 
-| Sürüm | Süre | Retry | Araç | Alt ajan | Rapor |
-|---|---|---|---|---|---|
-| 0.4.7 | 21 dk | 4 | 15 | 4 (hepsi boş) | 10 080 kr |
-| 0.4.8 | 13 dk | 11 | 12 | 4 (hepsi kısmi) | 6 827 kr |
-| **0.4.10** | **5,6 dk** | **0** | **8** | 0 | 3 827 kr |
+### Sorgu 1 — yerel plc_proje (çalışma alanı = `C:\...\plc_proje`)
 
-**%73 daha hızlı, sıfır retry.** Model bu kez alt ajan kullanmadı ve doğru
-kararı verdi: 8 `run_command` ile yapıyı çıkardı, 5,6 dakikada bitirdi.
-Devretmek bu iş için gereksizdi.
+| | |
+|---|---|
+| Süre | **169 sn** |
+| Araç | 12 (`read_file` 7, `glob` 2, `list_files` 1, `repo_map` 1, `run_command` 1) |
+| Alt ajan | **0** |
+| Retry | 0 |
+| Rapor | 6303 kr, 7 katmanlı tablo, dosya referansları |
 
-Rapor kalitesi de arttı — model neyi **doğrulamadığını** açıkça yazdı:
+Model `repo_map` ile haritayı çıkardı, `read_file` ile 7 kritik dosyayı
+(00_genel_felsefe, 05_katman_haritasi, platformio.ini …) **içerikten** okudu ve
+katmanları koda eşledi. Alt ajan gerekmedi — devretmemek doğru karardı.
 
-> **Doğrulanamayanlar (içerik okuması yapılmadı)**
-> Bu özet dizin yapısı, dosya adları, boyutlar, git geçmişi ve dal adları
-> üzerinden çıkarıldı. Şunlar içerikten teyit edilmedi: firmware'de gömülü
-> Wi-Fi/MQTT/API kimlik bilgisi olup olmadığı, `araclar/.env_ornek` içeriği,
-> `supabase/migrations` şema detayları…
+### Sorgu 2 — web araştırması (benzer proje)
 
-Ve devamında alt ajanı **kendisi önerdi**:
+| | |
+|---|---|
+| Süre | **384 sn** |
+| Araç | 7 (`websearch` **4**, `execute` 2, `todo_write` 1) |
+| Alt ajan | **0** |
+| Retry | 0 |
+| Rapor | 5578 kr, 5 katmanlı mimari tablosu |
 
-> "İstersen bir sonraki adımda sır taraması, veri şeması çıkarımı ve Flutter
-> bağımlılık gruplarını **paralel alt ajanlarla** içerikten doğrulayabilirim."
+4 arama **sırayla** yapıldı. Aradaki fark net:
 
-Yani 0.4.5–0.4.9 arası yaptığımız devretme kuralları modele işlemiş.
+| Sorgu | Süre | Neden |
+|---|---|---|
+| Yerel (paralel dosya okuma) | 169 sn | `read_file` 7 dosyayı tek adımda okudu |
+| Web (sıralı arama) | **384 sn** | 4 bağımsız arama tek tek |
 
-## Kusur: çalışma alanı dışındaki yollar
+## Bulgu: web araştırması için devretme kuralı yoktu
 
-Model bir kez `read_file` denedi ve hata aldı:
+Dosya keşfi için ipucu vardı (`Keşif ipucu: N dosya listelendi…`), web için
+**hiçbir sinyal yoktu**. `explorationHint` yalnızca `list_files`/`glob`/`grep`
+ve `read_file`/`repo_map`/`code_search` sayıyordu — `websearch` kapsam dışıydı.
 
-```
-Araç hatası: ENOENT: no such file or directory, stat
-'C:\Users\erdal\AppData\Local\Temp\evren-workspaces\mwekjvxv-5e451733\00_genel_felsefe.md'
-```
+Sonuç: 4 bağımsız arama 384 saniyede sırayla yapıldı; paralel alt ajanlarla
+~100 saniyeye inebilirdi.
 
-Sebep: çalışma alanı **geçici klasördü**, kullanıcı ise masaüstündeki
-`plc_proje` klasörünü sordu. `read_file` göreli yolu çalışma alanına göre çözer
-ve **kapsam dışına çıkamaz** (path traversal koruması — bilinçli).
+### Düzeltme
 
-Model PowerShell'e düşüp devam etti. Kayıp: 1 adım + dağınık çıktı. Daha
-önemlisi: model bunu **bilmiyordu**, deneyerek öğrendi.
+**1. Web araştırma ipucu** (`explorationHint.ts`):
 
-### Düzeltme 1: istem baştan söylüyor
-
-Kullanıcı metninde çalışma alanı dışı bir yol geçiyorsa (sürücü harfi,
-`/home/...`, "masaüstü", "belgeler", "indirilenler"…) sistem istemine eklenir:
-
-```
-ÇALIŞMA ALANI DIŞI: Kullanıcı çalışma alanı dışında bir yol söyledi.
-read_file, list_files, glob, grep ve write_file yalnızca çalışma alanı içinde
-çalışır (kapsam dışına erişim güvenlik gereği engellenir).
-Çalışma alanı dışındaki dosyaları okumak için run_command kullan ve mutlak yol
-ver. Örnek: Get-Content "C:\proje\README.md" -Encoding UTF8.
-read_file denemeyin; doğrudan run_command ile ilerleyin.
+```ts
+shouldHintWebResearch(state, hintsSent, maxHints=1, minSearches=3)
 ```
 
-Alt ajanlar için aynı not, görev metninde mutlak yol varsa eklenir.
+3+ web araması yapıldıysa ve henüz alt ajan açılmadıysa modele tek seferlik
+hatırlatma gider:
 
-### Düzeltme 2: hata mesajı eyleme dönük
+> DURUM: Birkaç web aramasını sırayla yaptın.
+> Bu aramalar birbirinden bağımsızsa **paralel** alt ajanlarla çok daha hızlı
+> tamamlanır: 2-4 `explore`, her birine **FARKLI** konu ve farklı kaynak türü
+> (resmî dokümantasyon, GitHub, teknik blog), sonuçları `task_wait` ile topla…
+> Aramalar birbirine bağlıysa bu ipucunu yok say.
 
-Önce: `Çalışma alanı dışına erişim engellendi.`
-Sonra:
+**2. Devretme kuralına web maddesi**:
+
+> Web araştırmasında 3+ bağımsız konu varsa (farklı teknoloji, farklı kaynak
+> türü) → 2-4 `explore` paralel; her birine farklı konu ve kaynak türü ver.
+
+## Kodlama devri: mimari uygunluk analizi
+
+Sorunuz: model, kodlama görevini farklı dosyalara alt ajanlarla dağıtabilir mi?
+Kodu denetledim.
+
+### Teknik cevap: evet, kısmen
+
+| Alt ajan türü | Yazma yetkisi | Nasıl |
+|---|---|---|
+| `explore` | **Hayır** | `readOnly = true` sabit |
+| `review` | **Hayır** | `readOnly = true` sabit |
+| `general` | **Evet** | `readOnly = agentType !== 'general' \|\| profile === 'plan'` |
+
+Yani `general` alt ajanı `write_file`/`edit_file`/`run_command` kullanabilir ve
+**farklı dosyalarda gerçekten kod yazabilir**. Ana ajan paralel `general`
+ajanları başlatabilir.
+
+### Ama mimari bunun için **hazır değil** — üç somut eksik
+
+**1. Yazma çakışması koruması yok.** Kodu taradım: alt ajanlar için worktree
+izolasyonu, dosya kilidi veya çakışma tespiti **yok**. İki `general` ajanı aynı
+dosyaya yazarsa son yazan kazanır, diğeri sessizce kaybolur.
+
+**2. Ana ajan ne yazıldığını görmüyordu.** Alt ajan yalnızca metin özeti
+döndürüyordu; `diff` yoktu. Kodlama devrinde bu "kara kutu" demek: ana ajan
+"3 dosya düzenledim" diyen bir özete güvenmek zorundaydı. **Bu sürümde
+düzeltildi** — `general` ajan sonucuna değişen dosya listesi ekleniyor:
+
 ```
-Çalışma alanı dışına erişim engellendi. Çalışma alanı dışındaki dosyalar için
-run_command + mutlak yol kullan (ör. Get-Content "C:\proje\dosya.md").
+Değişen dosyalar (3):
+- firmware/ana/config.h (düzenlendi)
+- bulut/edge/index.ts (yazıldı)
+- crm/sunucu.py (silindi)
 ```
 
-Böylece model hatayı görünce ne yapacağını biliyor — deneme yanılma yok.
+**3. Ajanlar birbirinin kararını görmüyor.** Bu bilinçli (Cognition ilkesi:
+örtük kararlar çelişir). Ama kodlamada sonucu daha ağır: iki ajan farklı dosyaya
+**tutarsız** stil/arayüz yazabilir — biri `async`, diğeri `sync`; biri aynı
+yardımcıyı kendi kopyasıyla, diğeri import'la. Derleme geçer, mimari bozulur.
 
-## Yan bulgu: Türkçe `\b` tuzağı tekrar çıktı
+### Mevcut hâliyle ne yapılabilir, ne yapılmamalı
 
-Yol tespiti ilk yazdığımda `\bmasaüstü\b` kullandım. **"masaüstü" ile biten
-metinde eşleşmedi** — çünkü `ü` JavaScript'te kelime karakteri değil, dolayısıyla
-sonda sözcük sınırı oluşmuyor.
+| Görev | Uygun mu | Neden |
+|---|---|---|
+| Sır/güvenlik taraması (salt-okunur) | ✅ | `explore`/`review`, çakışma yok |
+| Keşif: "bu değişiklik nereleri etkiler" | ✅ | salt-okunur |
+| Test yazımı (ayrı test dosyaları) | ⚠️ | dosya ayrımı netse çalışır |
+| Aynı modülde çoklu dosya düzenleme | ❌ | çakışma + tutarsızlık riski |
+| Büyük refactor (paylaşılan arayüz) | ❌ | ajanlar arayüzü ayrı ayrı yorumlar |
+| Bağımsız modüllerde paralel özellik | ⚠️ | ancak dosya sahipliği kesin ayrılırsa |
 
-Bu tuzağı 0.4.2'de hafıza sınıflandırıcısında yaşamıştık; aynı hata başka bir
-modülde tekrar etti. Çözüm: Türkçe sözcüklerde `\b` yerine **kök eşleşmesi**
-(`masaüst`, `belge`, `indirilen`) — çekim eklerini de yakalar.
+### Önerilen tasarım: sahiplik + worktree
 
-## Google araması sorusuna cevap
+Kodlama devrini güvenli kılmak için üç katman gerekir:
 
-**Şu an Google kullanılmıyor.** Kod Google CSE'yi destekliyor ama iki anahtar
-gerekiyor ve bunlar tanımlı değil:
+**a) Dosya sahipliği (zorunlu, ucuz).** Her `general` ajana **ayrı dosya
+kümesi** atanır. Ana ajan spawn öncesi sahiplik tablosu tutar; iki ajana aynı
+dosya verilmez. Çakışma isteği reddedilir (`spawn_agent` hatası).
 
-```
-GOOGLE_CSE_API_KEY: YOK
-GOOGLE_CSE_ID:      YOK
-etkin zincir:       duckduckgo → bing
-gerçek arama:       Arama (DuckDuckGo): "OpenSSL 3.5 release notes" · 5 sonuç
-```
+**b) Worktree izolasyonu (güçlü, orta maliyet).** Her ajana `git worktree` ile
+ayrı çalışma kopyası; sonuçta diff'ler ana ajana döner, ana ajan seçip uygular.
+Claude Code tam bunu yapıyor (`isolation: worktree`).
 
-Tanımlanırsa zincir otomatik `google → duckduckgo → bing` olur. Anahtarlar
-şu an **yalnızca ortam değişkeni** olarak okunuyor; arayüzde alan yok ve
-uygulama ortam değişkenlerini kendi başlatmıyor. Bu bir sonraki adım olabilir
-(ayarlar ekranına "Google Custom Search" alanı).
+**c) Arayüz sözleşmesi (tutarlılık).** Ana ajan spawn metnine paylaşılan
+arayüzü (tip imzaları, yardımcı fonksiyon adları) yazar; ajanlar onu kullanır.
+
+Bugün **a ve c** istemle kısmen yapılabilir; **b** kod gerektirir. Önerim:
+önce (a) sahiplik tablosu — küçük ve ölçülebilir; (b) ancak gerçek bir çok
+dosyalı refactor ihtiyacı doğduğunda.
 
 ## Doğrulama
 
 | Paket | Kontrol | Kapsam |
 |---|---|---|
-| `outside-workspace-hint-test` | 19 | Yol tespiti, Türkçe kök eşleşmesi, metin kalitesi |
+| `web-research-hint-test` | 22 | Eşik, sayaç, yapılandırma, metin kalitesi |
 
-Toplam: **60 paket / 1407 kontrol** (önceki 59/1388). typecheck ✓ build ✓ e2e ✓
-
-## Sizin bir sonraki sınamanız
-
-0.4.11'de aynı sorgu şunu yapmalı:
-
-1. `read_file` denemeden doğrudan `run_command` + mutlak yol
-2. Aynı hız (5-6 dk) veya daha iyi
-3. Kayıp adım olmaması
-
-İsterseniz ikinci adımda modelin önerdiği üçlüyü çalıştırın — sır taraması,
-şema çıkarımı, Flutter bağımlılıkları — bu kez alt ajanlar gerçekten iş
-yapacak ve 0.4.6–0.4.9 zincirini uçtan uca sınamış oluruz.
+Toplam: **61 paket / 1429 kontrol** (önceki 60/1407). typecheck ✓ build ✓ e2e ✓
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.
 İmzalama seçenekleri (yeniden başvuru veya ticari sertifika) ileride

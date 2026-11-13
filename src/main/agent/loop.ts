@@ -252,7 +252,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   const executeSubagent = (
     agentType: 'explore' | 'review' | 'general',
     prompt: string,
-    childController: AbortController
+    childController: AbortController,
+    subagentTaskId?: string
   ): Promise<{
     ok: boolean
     content: string
@@ -271,6 +272,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       prompt,
       workspaceRoot,
       sessionId: payload.sessionId,
+      subagentTaskId,
       mode,
       profile,
       permissions: settings.permissions,
@@ -343,7 +345,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       )
       send({ requestId, type: 'subagent-task', task: info })
 
-      void executeSubagent(agentType, prompt, childController)
+      void executeSubagent(agentType, prompt, childController, taskId)
         .then((result) => {
           if (childController.signal.aborted) {
             updateSubagentTask(taskId, {

@@ -259,6 +259,14 @@ export interface ToolCallInfo {
   id: string
   name: string
   arguments: string
+  /**
+   * Araç çağrısı bir **alt ajan** tarafından yapıldıysa türü.
+   * Arayüz bunu ana ajanın çağrılarından ayırır; tanılama için de gerekli
+   * (alt ajanların hangi araçları kullandığı önceden hiç görünmüyordu).
+   */
+  agentType?: SubagentType
+  /** Alt ajan görev kimliği (çoklu ajan koşusunda ayırt etmek için). */
+  subagentTaskId?: string
 }
 
 export interface ToolCallPayload {

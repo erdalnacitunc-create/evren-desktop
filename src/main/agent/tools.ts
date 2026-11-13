@@ -22,6 +22,13 @@ import { BrowserSession } from './browser'
 import { runLighthouseAudit } from '../lighthouse'
 import { queryUsbInventory, runPythonScript, usbDeviceReport } from './hardware'
 import { clampSkillBody } from './skillCatalog'
+import {
+  formatHits,
+  parseBing,
+  parseDuckDuckGo,
+  parseGoogleCse,
+  providerOrder
+} from './websearch'
 import { waitForQuestion } from './question'
 import { captureScreen, runComputerCommand, toSendKeys } from './computer'
 import {
@@ -1711,8 +1718,8 @@ export function createTools(options: {
     category: 'read',
     description:
       'Webde arama yapar ve sonuç başlıklarını, URLlerini ve kısa özetlerini döndürür. ' +
-      'Güncel bilgi veya dış kaynak bulmak için kullan. Google Custom Search yapılandırılmışsa ' +
-      'Google, aksi halde Bing kullanılır.',
+      'Güncel bilgi veya dış kaynak bulmak için kullan. Sağlayıcı zinciri: ' +
+      'Google Custom Search (anahtar yapılandırılmışsa) → DuckDuckGo → Bing.',
     parameters: {
       type: 'object',
       properties: {
@@ -1733,104 +1740,96 @@ export function createTools(options: {
       const query = str(args.query).trim()
       if (!query) return { ok: false, content: 'Arama sorgusu boş.' }
       const limit = Math.min(12, Math.max(1, Math.round(num(args.max_results, 8))))
-      const timeout = Math.min(120000, Math.max(1000, num(args.timeout_ms, 30_000)))
+      const timeout = Math.min(120_000, Math.max(1000, num(args.timeout_ms, 30_000)))
+
       const googleKey = process.env['GOOGLE_CSE_API_KEY']?.trim()
       const googleCx = process.env['GOOGLE_CSE_ID']?.trim()
-      const requestedProvider = (process.env['EVREN_WEBSEARCH_PROVIDER'] ?? '').toLowerCase()
-      const provider =
-        requestedProvider === 'google' || (!requestedProvider && googleKey && googleCx)
-          ? 'google'
-          : 'bing'
+      const forced = process.env['EVREN_WEBSEARCH_PROVIDER']?.trim()
+      const chain = providerOrder({ googleKey, googleCx, forced })
 
-      if (provider === 'google') {
-        if (!googleKey || !googleCx) {
-          return {
-            ok: false,
-            content:
-              'Google araması için GOOGLE_CSE_API_KEY ve GOOGLE_CSE_ID ortam değişkenleri gerekli.'
-          }
-        }
+      const headers = {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        Accept: 'text/html,application/json'
+      }
+
+      const attempts: string[] = []
+
+      for (const provider of chain) {
         try {
-          const googleUrl =
-            `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(googleKey)}` +
-            `&cx=${encodeURIComponent(googleCx)}&q=${encodeURIComponent(query)}` +
-            `&num=${Math.min(10, limit)}`
-          const response = await fetch(googleUrl, {
-            signal: AbortSignal.timeout(timeout),
-            headers: { Accept: 'application/json' }
-          })
-          const payload = (await response.json().catch(() => ({}))) as {
-            items?: Array<{ title?: string; link?: string; snippet?: string }>
-            error?: { message?: string }
-          }
-          if (!response.ok) {
-            return {
-              ok: false,
-              content: `Google araması başarısız: ${payload.error?.message ?? `HTTP ${response.status}`}`
+          if (provider === 'google') {
+            if (!googleKey || !googleCx) {
+              attempts.push('google: anahtar yok')
+              continue
             }
-          }
-          const results = (payload.items ?? [])
-            .slice(0, limit)
-            .map((item, index) => {
-              const title = stripHtml(item.title ?? '')
-              const link = item.link ?? ''
-              const snippet = stripHtml(item.snippet ?? '').slice(0, 320)
-              if (!title || !link) return ''
-              return `${index + 1}. ${title}\n   ${link}${snippet ? `\n   ${snippet}` : ''}`
+            const url =
+              `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(googleKey)}` +
+              `&cx=${encodeURIComponent(googleCx)}&q=${encodeURIComponent(query)}` +
+              `&num=${Math.min(10, limit)}`
+            const response = await fetch(url, {
+              signal: AbortSignal.timeout(timeout),
+              headers: { Accept: 'application/json' }
             })
-            .filter(Boolean)
-          if (results.length === 0) {
-            return { ok: false, content: `"${query}" için Google sonucu bulunamadı.` }
+            const payload = await response.json().catch(() => ({}))
+            if (!response.ok) {
+              attempts.push(`google: HTTP ${response.status}`)
+              continue
+            }
+            const hits = parseGoogleCse(payload, limit)
+            if (hits.length === 0) {
+              attempts.push('google: sonuç yok')
+              continue
+            }
+            return { ok: true, content: formatHits(hits, 'Google', query) }
           }
-          return {
-            ok: true,
-            content: `Arama (Google): ${query}\n\n${results.join('\n\n')}`
+
+          if (provider === 'duckduckgo') {
+            const response = await fetch(
+              `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+              { signal: AbortSignal.timeout(timeout), headers }
+            )
+            if (!response.ok) {
+              attempts.push(`duckduckgo: HTTP ${response.status}`)
+              continue
+            }
+            const hits = parseDuckDuckGo(await response.text(), limit)
+            if (hits.length === 0) {
+              attempts.push('duckduckgo: sonuç yok')
+              continue
+            }
+            return { ok: true, content: formatHits(hits, 'DuckDuckGo', query) }
           }
+
+          // Bing: son çare. Otomatik isteklerde sık sık sonuçsuz döner
+          // (13 Kasım 2026: b_algo=0, h2=0) — bu yüzden zincirin sonunda.
+          const response = await fetch(
+            `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${limit}&setlang=en&cc=us`,
+            { signal: AbortSignal.timeout(timeout), headers }
+          )
+          if (!response.ok) {
+            attempts.push(`bing: HTTP ${response.status}`)
+            continue
+          }
+          const hits = parseBing(await response.text(), limit)
+          if (hits.length === 0) {
+            attempts.push('bing: sonuç yok')
+            continue
+          }
+          return { ok: true, content: formatHits(hits, 'Bing', query) }
         } catch (error) {
-          return {
-            ok: false,
-            content: `Google araması başarısız: ${error instanceof Error ? error.message : String(error)}`
-          }
+          attempts.push(
+            `${provider}: ${error instanceof Error ? error.message : String(error)}`
+          )
         }
       }
 
-      const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${limit}&setlang=en&cc=us`
-      try {
-        const response = await fetch(url, {
-          signal: AbortSignal.timeout(timeout),
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.8,tr;q=0.6',
-            Accept: 'text/html'
-          }
-        })
-        if (!response.ok) {
-          return { ok: false, content: `Arama başarısız: HTTP ${response.status}` }
-        }
-        const html = await response.text()
-        const blocks = html.match(/<li class="b_algo"[\s\S]*?<\/li>/g) ?? []
-        const results: string[] = []
-        for (const block of blocks.slice(0, limit)) {
-          const titleMatch =
-            /<h2[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(block)
-          if (!titleMatch) continue
-          const title = stripHtml(titleMatch[2])
-          const href = decodeBingRedirect(titleMatch[1])
-          const snippetMatch = /<p[^>]*>([\s\S]*?)<\/p>/.exec(block)
-          const snippet = snippetMatch ? stripHtml(snippetMatch[1]).slice(0, 320) : ''
-          if (!title || !href) continue
-          results.push(`${results.length + 1}. ${title}\n   ${href}${snippet ? `\n   ${snippet}` : ''}`)
-        }
-        if (results.length === 0) {
-          return { ok: false, content: `"${query}" için arama sonucu bulunamadı.` }
-        }
-        return { ok: true, content: `Arama: ${query}\n\n${results.join('\n\n')}` }
-      } catch (error) {
-        return {
-          ok: false,
-          content: `Arama hatası: ${error instanceof Error ? error.message : String(error)}`
-        }
+      return {
+        ok: false,
+        content:
+          `"${query}" için hiçbir sağlayıcıdan sonuç alınamadı.` +
+          (attempts.length > 0 ? `\nDenemeler: ${attempts.join(' | ')}` : '') +
+          '\nİpucu: belirli bir URL biliyorsan webfetch ile doğrudan oku.'
       }
     }
   })

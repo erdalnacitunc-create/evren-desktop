@@ -188,137 +188,160 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
-# 0.4.9 Beta — kademeli fan-out ve kapsam disiplini
+# 0.4.10 Beta — web araması düzeltildi, alt ajan gözlemlenebilirliği
 
-Alt ajan sayısı artık **kapsama göre** seçiliyor ve ajanlar **kademeli**
-başlıyor. Amaç: 0.4.8'deki retry fırtınasını ve "kısmi rapor" oranını
-düşürmek.
+Web sorgusuyla alt ajan sistemini sınadım. **İki gerçek kusur** çıktı.
 
-## Önerinizin değerlendirmesi
+## Kusur 1: `websearch` tamamen bozuktu
 
-Öneriniz: *"sorgu kapsamına göre alt ajan sayısını belirle, ajanları tek tek
-(darboğaz oluşturmayacak şekilde) başlat."*
+Ölçüm: "Electron utilityProcess documentation" araması **WhatsApp indirme
+linkleri** döndürdü.
 
-**Doğru olan kısım:** sayının kapsama göre seçilmesi. 0.4.8'de model her
-sorguda 4 ajan açıyordu; 15 dosyalık iş için bu israf.
+Kök neden ölçüldü:
 
-**Düzeltilmesi gereken kısım:** "tek tek" (tam seri) yanlış olur. 4 ajan ×
-3 dk = 12 dk; paralelliğin tüm faydası kaybolur. Anthropic'in ölçümü:
-paralelleştirme karmaşık sorgularda süreyi **%90** kısaltıyor.
+```
+GET bing.com/search?q=Electron+utilityProcess+documentation
+→ HTTP 200, 97 KB HTML
+→ <li class="b_algo"> sayısı: 0
+→ <h2> sayısı: 0
+```
 
-**Bizim uyguladığımız orta yol — kademeli fan-out:**
+Yani ayrıştırıcı bozuk değildi; **Bing otomatik isteklere sonuç sayfası
+vermiyor**. Sayfada yalnızca reklam/navigasyon blokları kalıyor, ayrıştırıcı
+da onları sonuç sanıyor.
 
-| Kapsam | Ajan | Eşzamanlı |
+### Sağlayıcı ölçümü (bu makine, 13 Kasım 2026)
+
+| Sağlayıcı | Durum | Sonuç |
 |---|---|---|
-| < 15 dosya | 1 | 1 |
-| 15–60 dosya | 2 | 2 |
-| > 60 dosya veya 4+ dizin | 3–4 | **2** (2 dalga) |
+| **DuckDuckGo HTML** | 200, ~33 KB | **10 doğru sonuç** (electronjs.org) |
+| DuckDuckGo Lite | 200 | 0 sonuç (farklı DOM) |
+| Brave HTML | 429 | engellendi |
+| Wikipedia API | 200 | yalnızca ansiklopedik |
+| Bing HTML | 200 ama sonuçsuz | reklam blokları |
+| Google CSE | anahtar gerekir | anahtar varsa en iyi |
 
-Yani 4 ajan gerekiyorsa **2+2 dalga** hâlinde çalışır. Süre paralel çalışmaya
-yakın kalır, ani istek sıçraması olmaz.
+### Düzeltme
 
-## Neden ani sıçrama önemli — OpenAI rate-limit rehberi
-
-Canlı 0.4.8 koşusunda 4 ajan + ana ajan aynı anda istek attı: **5× ani artış**.
-Sağlayıcı `slow_down` (ramp-rate) döndürdü → **11 retry**, koşu 13 dakika.
-
-OpenAI'ın belgesi bunu açıkça söylüyor:
-
-> `429 / rate_limit_error / slow_down` — *"Your request rate increased too
-> quickly. Follow Retry-After when present, **reduce your request rate, and
-> then increase it gradually**."*
-
-Ve: *"A `slow_down` error can occur even when your traffic is within its
-requests-per-minute limits. It reflects **how quickly traffic increased**."*
-
-Yani limit istek **sayısı** değil, artış **hızı**. Bu yüzden eşzamanlılığı
-6'dan 2'ye indirdim ve ajanları kademeli başlatıyorum. Hard cap 6 olarak
-duruyor (açıkça istenirse).
-
-## İkinci kusur: kapsam disiplini
-
-0.4.8 koşusunda ajanlara `master\` (3 GB) ve `mobil\` (3 GB) dizinleri
-verildi. Ajanlar `build`/`node_modules` içinde adım bütçesini yaktı ve
-"kısmi" rapor döndürdü.
-
-İki düzeltme:
-
-**1. Kapsam brifingi** — her alt ajanın istemine otomatik ekleniyor:
+`src/main/agent/websearch.ts` — sağlayıcı **zinciri**:
 
 ```
-KAPSAM KURALLARI:
-- Şu dizinlere GİRME: node_modules, .git, build, dist, out, .dart_tool, .pio, …
-- Önce grep/glob ile daralt, sonra yalnızca gereken dosyaları oku.
+Google CSE (anahtar varsa) → DuckDuckGo → Bing (son çare)
 ```
 
-**2. Araç zaman aşımı + sinyal** — alt ajan araçlarına artık `AbortSignal`
-geçiyor. Bir `Get-ChildItem -Recurse` 3 GB'lık dizinde dakikalarca sürebiliyordu
-ve **durdurulamıyordu**; tek başına ajanın tüm bütçesini tüketiyordu.
+- Her sağlayıcı sırayla denenir; biri boş dönerse sonrakine geçilir.
+- Hata mesajı hangi sağlayıcıların neden başarısız olduğunu listeler.
+- `EVREN_WEBSEARCH_PROVIDER` ile zorlanabilir.
+- Ayrıştırıcılar saf fonksiyon: `parseDuckDuckGo`, `parseBing`,
+  `parseGoogleCse`, `decodeDuckDuckGoRedirect`.
 
-- Araç başına azami 90 sn
-- Son tarihe 10 sn kala kesilir
-- Kesilirse ajan elindekini yazar (`partialReason: 'tool-timeout'`)
-
-## Üçüncü iyileştirme: kısmi sonuç artık yapısal
-
-0.4.8'de ana ajan "kısmi mi" diye metinden tahmin ediyordu; nihai raporda
-*"içerik doğrulanamadı"* diye 12 kez yazdı.
-
-Artık `SubagentTaskInfo` üzerinde:
-
-```ts
-partial?: boolean
-partialReason?: 'steps' | 'tools' | 'deadline' | 'tool-timeout'
-```
-
-Ve ana ajana dönen metinde açıkça görünüyor:
+Düzeltme sonrası aynı sorgu:
 
 ```
-Alt ajan (explore) sonucu [KISMİ — deadline]:
+Arama (DuckDuckGo): Electron utilityProcess documentation
 
-## Özet — …
+1. utilityProcess - Electron
+   https://www.electronjs.org/docs/latest/api/utility-process
+   utilityProcess creates a child process with Node.js and Message ports enabled…
 ```
+
+## Kusur 2: alt ajanların araç çağrıları görünmüyordu
+
+Alt ajan yalnızca `tool-result` olayı yayınlıyordu, `tool-call` değil. Yani:
+
+- Arayüz alt ajanın **ne yaptığını** gösteremiyordu
+- Testler hangi araçların kullanıldığını gözleyemiyordu
+- `session-events.jsonl` alt ajan araç çağrılarını kaçırıyordu
+
+Düzeltme: alt ajan artık `tool-call` yayınlıyor ve çağrıya `agentType` +
+`subagentTaskId` ekleniyor. Böylece hangi çağrının hangi ajana ait olduğu
+görünüyor.
+
+## Sınamanın sonucu: web üzerinde paralel alt ajanlar
+
+Üç alt ajan, üç ayrı konu, paralel (gerçek model, gerçek ağ):
+
+| Ajan | Süre | Kullandığı araçlar | Birincil kaynak |
+|---|---|---|---|
+| electron | ~70 sn | `websearch`, `webfetch` | electronjs.org |
+| sqlite | ~60 sn | `websearch`, `webfetch` | sqlite.org |
+| rust | 36 sn | `websearch`, `webfetch` | doc.rust-lang.org |
+
+Toplam paralel süre: **86 saniye**.
+
+**Kaynak çeşitliliği doğrulandı:**
+
+```
+kaynak alan adları: electronjs.org, releases.electronjs.org, github.com,
+                    sqlite.org, doc.rust-lang.org
+```
+
+Hiçbir URL tekrar etmiyor, her ajan kendi konusunda kaldı, çapraz kirlenme yok
+(electron ajanı WAL'dan, sqlite ajanı Clone'dan hiç bahsetmedi).
+
+## Sorunuzun cevabı: ajanlar birbirinden haberdar DEĞİL
+
+Bu **tasarım gereği** ve testle sabitlendi:
+
+> Her alt ajan yalnızca kendi istemini ve kendi araç çıktısını görür.
+> Paylaşılan bağlam yok.
+
+Neden:
+
+1. **Cognition ilkesi** — paylaşılan bağlam, ajanların örtük kararlarını
+   çelişkili hâle getirir; birleştirme kurtarılamaz (Flappy Bird örneği).
+2. **Bağlam izolasyonu** — alt ajanın varlık sebebi, ana bağlamı
+   kirletmeden çalışması. Ajanlar birbirinin bulgularını görseydi, her biri
+   diğerinin bağlamını da taşımak zorunda kalırdı (N ajan = N² bağlam).
+3. **Ölçüm** — bu testte her ajanın "gördüğü" metin denetlendi: hiçbiri
+   diğerinin konusunu içermiyor.
+
+Peki "haberdar" olmadan farklı kaynaklara nasıl gidiyorlar? **Ana ajan
+görevleri bölerken** farklı kaynak/alan atadığı için. Bu, merkezî
+koordinasyon; ajanlar arası iletişim değil.
+
+## İsterseniz eklenebilecek: paylaşılan bulgu panosu
+
+Ajanların birbirini görmesi *istenirse* doğru yol, doğrudan bağlam paylaşımı
+değil **yapısal pano**:
+
+```
+reconBoard.write(taskId, { url, claim, evidence })
+reconBoard.read(exceptOwn)   // yalnızca URL + tek satır iddia
+```
+
+- Yalnızca **URL + tek satır iddia** paylaşılır (tam bağlam değil)
+- Ajan kendi bulgusunu yazmadan önce panoyu okur: "bu kaynağa başkası gitti"
+- Kaynak tekrarı biter, bağlam şişmez
+
+Bu, Cognition'ın itirazını (örtük karar paylaşımı) ihlal etmez çünkü paylaşılan
+şey *karar* değil *kaynak işareti*. Maliyeti düşük, faydası ölçülebilir.
+
+**Şu an eklemedim** — çünkü mevcut testte kaynak tekrarı zaten yoktu (0 tekrar
+URL). Pano ancak tekrar gözlemlenirse gerekli.
 
 ## Doğrulama
 
 | Paket | Kontrol | Kapsam |
 |---|---|---|
-| `agent-fanout-test` | 42 | Kapsam eşikleri, eşzamanlılık tavanı, kademe, brifing, plc_proje senaryosu |
-| `agent-fanout-e2e-test` | 6 | Gerçek döngü: 4 ajan → **tepe eşzamanlılık 2**, 2+2 dalga |
+| `websearch-parse-test` | 46 | DDG/Bing/Google ayrıştırma, yönlendirme çözümü, sağlayıcı sırası |
+| `agent-live-web-test` | 12 | Gerçek ağ: 3 paralel ajan, kaynak çeşitliliği, haberdarlık |
 
-Uçtan uca ölçüm:
+Toplam: **59 paket / 1388 kontrol** (önceki 58/1342). typecheck ✓ build ✓ e2e ✓
 
+`agent-live-web-test` gerçek ağa çıktığı için `test:unit` dışında:
+
+```bash
+node scripts/run-unit.cjs scripts/agent-live-web-test.ts
 ```
-zaman çizelgesi: 49ms, 49ms, 178ms, 178ms · tepe: 2
-```
 
-Yani 4 ajan iki dalga hâlinde gitti; önceki davranışta dördü de 0 ms'de
-başlıyordu.
+## Bilinen sınırlar
 
-`agent-live-subagent-test` (gerçek model, 30 dosya): 6/6 geçti, sonuç dolu.
-
-Toplam: **58 paket / 1342 kontrol** (önceki: 56/1294). typecheck ✓ build ✓ e2e ✓
-
-## Neden tam seri (önerinizin ilk hâli) değil
-
-| Strateji | 4 ajan süresi | İstek profili |
-|---|---|---|
-| Tam paralel | ~3 dk | 5× ani sıçrama → retry fırtınası |
-| **Kademeli 2+2** | **~4–5 dk** | 3× → 2× kademeli, retry yok |
-| Tam seri | ~12 dk | 1× sabit, retry yok |
-
-Kademeli, paralelin hızına yakın; tam seriden 2–3 kat hızlı.
-
-## Sıradaki
-
-0.4.9'u kurup **aynı plc_proje sorgusunu** tekrar çalıştırın. Ölçülecek üç şey:
-
-1. **Retry sayısı** — 11'den kaça düştü?
-2. **Kısmi rapor oranı** — 4/4'ten kaça düştü?
-3. **Süre** — 13 dakikadan kaça düştü?
-
-Bu üç sayı 4. aşamaya (triage) geçip geçmeyeceğimize karar verecek.
-Çoklu Evren entegrasyonu hâlâ sizin belirlediğiniz sırada.
+- DuckDuckGo HTML arayüzü resmî API değil; DOM değişirse ayrıştırıcı kırılır.
+  Bu yüzden zincir var ve hata mesajı hangi sağlayıcının düştüğünü söylüyor.
+- Alt ajan `browser` aracını kullanmıyor (yalnızca `websearch`/`webfetch`).
+  JS gerektiren sayfalar `webfetch` ile okunamaz.
+- Sayfa başına içerik sınırı webfetch'te mevcut; çok büyük sayfalar kesilir.
 SignPath Foundation başvurusu Ekim 2026'da reddedildi; bu beta installer
 imzasızdır. Windows SmartScreen “Bilinmeyen yayıncı” uyarısı gösterebilir.
 İmzalama seçenekleri (yeniden başvuru veya ticari sertifika) ileride

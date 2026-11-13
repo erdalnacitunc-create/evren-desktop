@@ -40,6 +40,8 @@ export interface SubagentOptions {
   controller: AbortController
   send: (event: ChatEvent) => void
   approval?: (request: AgentApprovalRequest) => Promise<boolean>
+  /** Görev kimliği: araç çağrılarını bu alt ajana atfetmek için. */
+  subagentTaskId?: string
 }
 
 /**
@@ -212,7 +214,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
     profile,
     permissions,
     controller,
-    send
+    send,
+    subagentTaskId
   } = options
 
   const skills = await loadEnabledSkills()
@@ -334,6 +337,21 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           }
         }
         toolCallCount += 1
+
+        // Araç çağrısını **yayınla**: önceden yalnızca sonuç gidiyordu, bu
+        // yüzden arayüz alt ajanın ne yaptığını gösteremiyor ve testler
+        // hangi araçların kullanıldığını gözleyemiyordu.
+        send({
+          requestId: parentRequestId,
+          type: 'tool-call',
+          call: {
+            id: call.id,
+            name: call.name,
+            arguments: call.arguments,
+            agentType,
+            subagentTaskId
+          }
+        })
 
         const tool = registry.get(call.name)
         if (!tool) {

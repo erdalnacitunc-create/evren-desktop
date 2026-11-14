@@ -188,6 +188,33 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.15 Beta — web araması onarımı, alt ajan bütçesi, yinelenen rapor
+
+0.4.14 canlı koşusunda üç kusur bulundu:
+
+| Kusur | Ölçüm | Düzeltme |
+|---|---|---|
+| `websearch` bozuk | 15 aramanın **9'u başarısız**, 2'si alakasız ("Cleveland doğum hasarı avukatı") | Sade Bing URL + **alaka süzgeci** + bot-koruması tespiti (5 dk cooldown) + **Google News RSS yedeği** + sağlayıcı hafızası |
+| Alt ajan bütçesi uygulanmıyor | 482 ve 575 sn süren ajanlar (bütçe 210 sn); zaman araçlarda değil, **tek parça 291/423 sn model üretiminde** | Bütçe **akışa** uygulanır: kalan süre `totalTimeoutMs`, dolunca **kısmi sonuç** + `task_continue`; %75'te toparlama hatırlatması |
+| Rapor iki kez yazıldı | 9,2k kr taslak + 19,5k kr birleşik rapor | Bildirim metni: "yanıtı baştan yazma, yeni bulguları ekle" |
+
+Arama onarımının özü: sağlayıcı "sonuç var" diye kabul edilmiyor — sorgu
+sözcüklerinin en az %50'si sonuçlarda geçmeli. Bing'in başka sorguya döndürdüğü
+sayfalar (Lidl, doğum hasarı avukatı) böylece reddediliyor.
+
+## Doğrulama
+
+| Paket | Kontrol |
+|---|---|
+| `websearch-parse-test` | 86 |
+| `websearch-live-test` (gerçek ağ) | 14 |
+| `subagent-deadline-test` | 12 |
+| `subagent-log-test` | 21 |
+| `subagent-wait-test` | 21 |
+
+Toplam: **67 paket / 1605 kontrol** (önceki 66/1553). typecheck ✓ build ✓ e2e ✓
+Ayrıntı: `docs/RELEASE-0.4.15.md`.
+
 # 0.4.14 Beta — alt ajan bekleme kusuru, devam ettirme, ayrıntılı izleme
 
 Canlı takipte iki kusur bulundu: `task_wait` zaman aşımı **hata gibi** dönüyordu

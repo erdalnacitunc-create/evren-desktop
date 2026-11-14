@@ -24,11 +24,22 @@ import { queryUsbInventory, runPythonScript, usbDeviceReport } from './hardware'
 import { clampSkillBody } from './skillCatalog'
 import { isWriteAllowed, writeBlockedMessage } from './fileOwnership'
 import {
+  blockedReason,
+  filterRelevantHits,
   formatHits,
+  gradeHits,
+  looksBlocked,
+  markProviderBlocked,
+  markProviderSuccess,
   parseBing,
   parseDuckDuckGo,
   parseGoogleCse,
-  providerOrder
+  parseRss,
+  preferredProvider,
+  providerOrder,
+  relevanceOf,
+  type SearchHit,
+  type SearchProvider
 } from './websearch'
 import { waitForQuestion } from './question'
 import { captureScreen, runComputerCommand, toSendKeys } from './computer'
@@ -1852,18 +1863,65 @@ export function createTools(options: {
       const googleKey = process.env['GOOGLE_CSE_API_KEY']?.trim()
       const googleCx = process.env['GOOGLE_CSE_ID']?.trim()
       const forced = process.env['EVREN_WEBSEARCH_PROVIDER']?.trim()
-      const chain = providerOrder({ googleKey, googleCx, forced })
+      const chain = providerOrder({
+        googleKey,
+        googleCx,
+        forced,
+        // Bu süreçte çalışan sağlayıcı öne alınır: aynı oturumda sürekli
+        // bloklu sağlayıcıyı denemek 9/15 hataya yol açıyordu.
+        preferred: preferredProvider()
+      })
 
       const headers = {
         'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36',
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
-        Accept: 'text/html,application/json'
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
       }
 
       const attempts: string[] = []
+      /**
+       * Eşiği geçemeyen en iyi aday. Türkçe sorgularda (ör. "benzer açık
+       * kaynak projeleri") İngilizce sonuçlar hiçbir sözcükle örtüşmeyebilir;
+       * o durumda tamamen başarısız olmak yerine en yüksek uyumlu sonucu
+       * düşük-güven notuyla döndürmek daha yararlı.
+       */
+      let bestFallback: { provider: SearchProvider; hits: SearchHit[]; score: number } | null = null
+
+      /**
+       * Bir sağlayıcının sonuçlarını değerlendirir.
+       *
+       * Kritik: "sonuç var" yeterli değil. Bing otomatik isteklere başka bir
+       * sorgunun sayfasını döndürüyor (14 Kasım 2026: "esp8266 flasher" →
+       * Lidl mağaza bulucu). Sorguyla örtüşmeyen sonuç **çöp** sayılır.
+       */
+      const accept = (
+        provider: SearchProvider,
+        rawHits: SearchHit[],
+        label: string
+      ): { ok: true; content: string } | null => {
+        const graded = gradeHits(rawHits, query)
+        if (!graded.accepted) {
+          attempts.push(
+            `${provider}: ${rawHits.length} sonuç ama sorguyla ilgisiz (uyum ${graded.score.toFixed(2)})`
+          )
+          if (graded.hits.length > 0 && (!bestFallback || graded.score > bestFallback.score)) {
+            bestFallback = { provider, hits: graded.hits, score: graded.score }
+          }
+          return null
+        }
+        markProviderSuccess(provider)
+        return { ok: true, content: formatHits(graded.hits.slice(0, limit), label, query) }
+      }
 
       for (const provider of chain) {
+        // Bu süreçte bloklandıysa hiç denemeden geç.
+        const blocked = blockedReason(provider)
+        if (blocked) {
+          attempts.push(`${provider}: ${blocked}`)
+          continue
+        }
+
         try {
           if (provider === 'google') {
             if (!googleKey || !googleCx) {
@@ -1883,12 +1941,9 @@ export function createTools(options: {
               attempts.push(`google: HTTP ${response.status}`)
               continue
             }
-            const hits = parseGoogleCse(payload, limit)
-            if (hits.length === 0) {
-              attempts.push('google: sonuç yok')
-              continue
-            }
-            return { ok: true, content: formatHits(hits, 'Google', query) }
+            const accepted = accept('google', parseGoogleCse(payload, limit), 'Google')
+            if (accepted) return accepted
+            continue
           }
 
           if (provider === 'duckduckgo') {
@@ -1896,34 +1951,52 @@ export function createTools(options: {
               `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
               { signal: AbortSignal.timeout(timeout), headers }
             )
-            if (!response.ok) {
-              attempts.push(`duckduckgo: HTTP ${response.status}`)
+            const body = await response.text()
+            if (!response.ok || looksBlocked(response.status, body)) {
+              const note = `HTTP ${response.status}${looksBlocked(response.status, body) ? ' (bot koruması)' : ''}`
+              attempts.push(`duckduckgo: ${note}`)
+              markProviderBlocked('duckduckgo', note)
               continue
             }
-            const hits = parseDuckDuckGo(await response.text(), limit)
-            if (hits.length === 0) {
-              attempts.push('duckduckgo: sonuç yok')
-              continue
-            }
-            return { ok: true, content: formatHits(hits, 'DuckDuckGo', query) }
+            const accepted = accept('duckduckgo', parseDuckDuckGo(body, limit), 'DuckDuckGo')
+            if (accepted) return accepted
+            continue
           }
 
-          // Bing: son çare. Otomatik isteklerde sık sık sonuçsuz döner
-          // (13 Kasım 2026: b_algo=0, h2=0) — bu yüzden zincirin sonunda.
+          if (provider === 'bing') {
+            // Parametresiz URL kullanılır: `count`, `setlang`, `cc`
+            // eklendiğinde Bing sonuç yerine JS kabuğu döndürüyor
+            // (14 Kasım 2026 ölçümü: b_algo 0 → 10).
+            const response = await fetch(
+              `https://www.bing.com/search?q=${encodeURIComponent(query)}`,
+              { signal: AbortSignal.timeout(timeout), headers }
+            )
+            const body = await response.text()
+            if (!response.ok || looksBlocked(response.status, body)) {
+              const note = `HTTP ${response.status}${looksBlocked(response.status, body) ? ' (bot koruması)' : ''}`
+              attempts.push(`bing: ${note}`)
+              markProviderBlocked('bing', note)
+              continue
+            }
+            const accepted = accept('bing', parseBing(body, limit), 'Bing')
+            if (accepted) return accepted
+            continue
+          }
+
+          // Google News RSS: HTML kazıma bloklandığında çalışan yedek.
           const response = await fetch(
-            `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${limit}&setlang=en&cc=us`,
+            `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`,
             { signal: AbortSignal.timeout(timeout), headers }
           )
-          if (!response.ok) {
-            attempts.push(`bing: HTTP ${response.status}`)
+          const body = await response.text()
+          if (!response.ok || looksBlocked(response.status, body)) {
+            const note = `HTTP ${response.status}`
+            attempts.push(`googlenews: ${note}`)
+            markProviderBlocked('googlenews', note)
             continue
           }
-          const hits = parseBing(await response.text(), limit)
-          if (hits.length === 0) {
-            attempts.push('bing: sonuç yok')
-            continue
-          }
-          return { ok: true, content: formatHits(hits, 'Bing', query) }
+          const accepted = accept('googlenews', parseRss(body, limit), 'Google News (RSS)')
+          if (accepted) return accepted
         } catch (error) {
           attempts.push(
             `${provider}: ${error instanceof Error ? error.message : String(error)}`
@@ -1931,12 +2004,35 @@ export function createTools(options: {
         }
       }
 
+      // Hiçbir sağlayıcı eşiği geçemediyse en iyi adayı düşük güvenle döndür.
+      // (TS, closure içindeki atamayı göremediği için açık tip daraltması.)
+      const chosen = bestFallback as
+        | { provider: SearchProvider; hits: SearchHit[]; score: number }
+        | null
+      if (chosen) {
+        markProviderSuccess(chosen.provider)
+        return {
+          ok: true,
+          content:
+            formatHits(chosen.hits.slice(0, limit), `${chosen.provider} (düşük uyum)`, query) +
+            `\n\n_NOT: Sorguyla tam örtüşme bulunamadı (uyum ${chosen.score.toFixed(2)}). ` +
+            'Sonuçlar yine de en yakın eşleşmelerdir; iddiaları doğrulamadan kullanma._'
+        }
+      }
+
+      const notes = attempts.join(' | ')
+      const blockedCount = attempts.filter((entry) => entry.includes('atlanacak')).length
       return {
         ok: false,
         content:
-          `"${query}" için hiçbir sağlayıcıdan sonuç alınamadı.` +
-          (attempts.length > 0 ? `\nDenemeler: ${attempts.join(' | ')}` : '') +
-          '\nİpucu: belirli bir URL biliyorsan webfetch ile doğrudan oku.'
+          `"${query}" için hiçbir sağlayıcıdan geçerli sonuç alınamadı.\n` +
+          `Denemeler: ${notes}\n` +
+          (blockedCount > 0
+            ? 'Bazı sağlayıcılar bu ağdan bot koruması döndürüyor; 5 dakika atlanacaklar.\n'
+            : '') +
+          'İpucu: `websearch` yerine doğrudan kaynağa gidin — GitHub arama API’si ' +
+          '(`https://api.github.com/search/repositories?q=...`), ' +
+          'resmî dokümantasyon veya bildiğiniz bir URL için `webfetch` kullanın.'
       }
     }
   })

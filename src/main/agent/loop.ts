@@ -333,7 +333,11 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     pendingSubagentNotices.push(
       `ALT AJAN BİLDİRİMİ: ${label}${task.agentType} (${task.id.slice(0, 12)}) ` +
         `durum=${task.status}${partialNote}. ` +
-        'Sonucu `task_wait` ile al veya gerekmiyorsa yok say; bekleme.'
+        'Sonucu `task_wait` ile al.\n' +
+        'Bu bir hatırlatmadır, yeni bir görev değildir. Yanıtını **baştan yazma**: ' +
+        'zaten yazdığın yanıt varsa yalnızca yeni bulguları ekleyecek kısa bir bölüm ' +
+        'ekle (ör. "## Alt ajan bulguları") ve çelişki varsa düzelt. ' +
+        'Kullanıcıya aynı raporu ikinci kez sunma.'
     )
     // Bildirimi ayrıca arayüze düş: kullanıcı da görsün.
     log.info(`Alt ajan bildirimi kuyruğa alındı: ${task.id.slice(0, 12)} ${task.status}`)
@@ -959,6 +963,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     'yeniden `task_wait` çağır.' +
     '\n- Kısmi sonuç (`[KISMİ — tools/steps/deadline]`) eksik demektir; eksik kısmı ' +
     '`task_continue` ile aynı ajana tamamlat veya kendin yap.' +
+    '\n- Bir alt ajan bitince yanıtı **baştan yazma**; yeni bulguları mevcut yanıtına ' +
+    'ekle ve çelişki varsa düzelt.' +
     '\n- Bir alt ajan takıldı/garip sonuç verdi diye düşünüyorsan `task_logs` ile adım, ' +
     'araç süresi ve hata kaydını oku.' +
     '\n- Kod incelemesi veya risk taraması → `review` alt ajanı.' +

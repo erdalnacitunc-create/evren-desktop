@@ -1,12 +1,23 @@
 /// <reference types="node" />
 import {
+  blockedReason,
   decodeBingRedirect,
   decodeDuckDuckGoRedirect,
+  filterRelevantHits,
   formatHits,
+  gradeHits,
+  looksBlocked,
+  markProviderBlocked,
+  markProviderSuccess,
   parseBing,
   parseDuckDuckGo,
   parseGoogleCse,
+  parseRss,
+  preferredProvider,
   providerOrder,
+  queryTokens,
+  relevanceOf,
+  resetProviderMemory,
   stripHtml
 } from '../src/main/agent/websearch'
 
@@ -167,28 +178,30 @@ function check(label: string, actual: unknown, expected: unknown): void {
 }
 
 // ============ 11) Sağlayıcı sırası ============
+// 0.4.15: RSS yedeği eklendi. DuckDuckGo/Bing HTML bot koruması döndürdüğünde
+// tek çalışan kaynak Google News RSS oluyor, bu yüzden her zincirde var.
 {
   check(
     'anahtar yoksa duckduckgo önce',
     providerOrder({}),
-    ['duckduckgo', 'bing']
+    ['duckduckgo', 'bing', 'googlenews']
   )
   check(
     'anahtar varsa google önce',
     providerOrder({ googleKey: 'k', googleCx: 'c' }),
-    ['google', 'duckduckgo', 'bing']
+    ['google', 'duckduckgo', 'bing', 'googlenews']
   )
   check(
     'zorlanan google anahtarsız yok sayılır',
     providerOrder({ forced: 'google' }),
-    ['duckduckgo', 'bing']
+    ['duckduckgo', 'bing', 'googlenews']
   )
   check(
     'zorlanan duckduckgo',
     providerOrder({ forced: 'duckduckgo', googleKey: 'k', googleCx: 'c' }),
-    ['duckduckgo', 'bing']
+    ['duckduckgo', 'googlenews']
   )
-  check('zorlanan bing', providerOrder({ forced: 'bing' }), ['bing', 'duckduckgo'])
+  check('zorlanan bing', providerOrder({ forced: 'bing' }), ['bing', 'googlenews'])
 }
 
 // ============ 12) Gerçek DDG çıktısıyla (kaydedilmiş örnek) ============
@@ -208,5 +221,157 @@ function check(label: string, actual: unknown, expected: unknown): void {
   check('aynı girdi aynı çıktı', JSON.stringify(parseDuckDuckGo(html)), JSON.stringify(parseDuckDuckGo(html)))
 }
 
-console.log(`TOTAL=46 FAILED=${failed}`)
+// ============ 14) RSS ayrıştırma ============
+{
+  const xml =
+    '<rss><channel>' +
+    '<item><title>Ali Slim&apos;s ESP Offline Flasher - Hackster.io</title>' +
+    '<link>https://news.google.com/rss/articles/CBMi123?oc=5</link>' +
+    '<pubDate>Fri, 22 Sep 2023 18:13:22 GMT</pubDate>' +
+    '<description>&lt;a href="https://x"&gt;ESP8266 firmware flasher&lt;/a&gt;</description></item>' +
+    '<item><title>Flash ESP32 Home Automation - Embedded.com</title>' +
+    '<link>https://news.google.com/rss/articles/CBMi456?oc=5</link>' +
+    '<description>esp32 flasher via connectors</description></item>' +
+    '<item><title>Bozuk</title><description>link yok</description></item>' +
+    '</channel></rss>'
+  const hits = parseRss(xml, 8)
+  check('RSS iki geçerli sonuç', hits.length, 2)
+  check('RSS başlık temiz', hits[0]?.title.includes('ESP Offline Flasher'), true)
+  check('RSS bağlantı', hits[0]?.url.startsWith('https://news.google.com/'), true)
+  check('RSS tarih taşındı', hits[0]?.published, 'Fri, 22 Sep 2023 18:13:22 GMT')
+  check('RSS açıklama etiketleri temizlendi', /<\w+/.test(hits[0]?.snippet ?? ''), false)
+
+  const atom =
+    '<feed><entry><title>Atom başlık</title>' +
+    '<link rel="alternate" href="https://example.com/a"/>' +
+    '<summary>esp8266 özet</summary></entry></feed>'
+  const atomHits = parseRss(atom, 5)
+  check('Atom ayrıştırıldı', atomHits.length, 1)
+  check('Atom href kullanıldı', atomHits[0]?.url, 'https://example.com/a')
+}
+
+// ============ 15) Alaka süzgeci — canlı çöp sonuçlar ============
+{
+  const query = 'esp8266 flasher esp32 standalone'
+  // 14 Kasım 2026 canlı gözlem: Bing bu sorguya Lidl mağaza bulucu döndürdü.
+  const garbage = [
+    { title: 'Store Finder - Lidl US', url: 'https://www.lidl.com/c/store-finder', snippet: '' },
+    { title: 'Google Maps', url: 'https://www.google.com/maps/search/lidl', snippet: '' },
+    { title: 'Lidl Sverige', url: 'https://www.lidl.se/', snippet: '' }
+  ]
+  check('çöp sonuç uyumu sıfır', relevanceOf(garbage, query), 0)
+  check('çöp sonuç süzüldü', filterRelevantHits(garbage, query).length, 0)
+
+  // Aynı canlı koşuda DuckDuckGo'nun döndürdüğü gerçek sonuçlar.
+  const good = [
+    {
+      title: 'Partition Tables - ESP32 - ESP-IDF Programming Guide',
+      url: 'https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/partition-tables.html',
+      snippet: 'esp32 partition table factory app'
+    },
+    {
+      title: 'esp8266 flasher standalone tool',
+      url: 'https://github.com/example/esp8266-flasher',
+      snippet: 'flash esp32 from esp8266'
+    }
+  ]
+  check('gerçek sonuç uyumu yüksek', relevanceOf(good, query) >= 0.75, true)
+  check('gerçek sonuçlar korundu', filterRelevantHits(good, query).length, 2)
+
+  // Karma: alakasız tek satır ayıklanır.
+  const mixed = [...good, { title: 'Best Cleveland Birth Injury Attorneys', url: 'https://x.example', snippet: '' }]
+  check('karma listede çöp atıldı', filterRelevantHits(mixed, query).length, 2)
+}
+
+// ============ 16) Sorgu sözcükleri ============
+{
+  check('Türkçe etekler atıldı', queryTokens('webde esp8266 flasher ara'), ['esp8266', 'flasher'])
+  check('kısa sözcük atıldı', queryTokens('a bc def'), ['def'])
+  check('tekrarlar birleşti', queryTokens('esp32 esp32 flasher'), ['esp32', 'flasher'])
+  check('boş sorgu', queryTokens('   '), [])
+}
+
+// ============ 17) Bot koruması tespiti ============
+{
+  check('DDG 202 engel', looksBlocked(202, 'anything'), true)
+  check('429 engel', looksBlocked(429, ''), true)
+  check('captcha metni', looksBlocked(200, '<title>Captcha</title>'), true)
+  check('anubis challenge', looksBlocked(200, '{"anubis_challenge":1}'), true)
+  check('normal sayfa engel değil', looksBlocked(200, '<html><body>sonuçlar</body></html>'), false)
+}
+
+// ============ 18) Sağlayıcı hafızası ============
+{
+  resetProviderMemory()
+  check('başlangıçta tercih yok', preferredProvider(), null)
+  check('başlangıçta engel yok', blockedReason('duckduckgo'), null)
+
+  markProviderBlocked('duckduckgo', 'HTTP 202 (bot koruması)', 1_000_000)
+  const reason = blockedReason('duckduckgo', 1_000_000)
+  check('engel raporlandı', typeof reason === 'string' && reason.includes('202'), true)
+  check('süre bilgisi var', String(reason).includes('atlanacak'), true)
+
+  // Cooldown dolunca serbest.
+  check('cooldown sonrası serbest', blockedReason('duckduckgo', 1_000_000 + 6 * 60 * 1000), null)
+
+  markProviderSuccess('googlenews')
+  check('başarılı sağlayıcı öne alınır', preferredProvider(), 'googlenews')
+  const order = providerOrder({ preferred: 'googlenews' })
+  check('sıralamada başı çeker', order[0], 'googlenews')
+  check('diğerleri korunur', order.length >= 3, true)
+  resetProviderMemory()
+}
+
+// ============ 19) Sağlayıcı sırası ============
+{
+  const base = providerOrder({})
+  check('anahtarsız Google yok', base.includes('google'), false)
+  check('RSS yedek var', base.includes('googlenews'), true)
+  const withKey = providerOrder({ googleKey: 'k', googleCx: 'c' })
+  check('anahtarla Google başta', withKey[0], 'google')
+  check('zorlanan sağlayıcı', providerOrder({ forced: 'bing' })[0], 'bing')
+  check('zorlanan RSS', providerOrder({ forced: 'googlenews' })[0], 'googlenews')
+}
+
+// ============ 20) gradeHits: çöp reddi + düşük uyum yedeği ============
+{
+  const query = 'esp8266 flasher esp32 standalone'
+  const garbage = gradeHits(
+    [
+      { title: 'Store Finder - Lidl US', url: 'https://www.lidl.com/x', snippet: '' },
+      { title: 'Google Maps', url: 'https://www.google.com/maps', snippet: '' }
+    ],
+    query
+  )
+  check('çöp kabul edilmedi', garbage.accepted, false)
+  check('çöp sonrası boş', garbage.hits.length, 0)
+  check('çöp uyumu sıfır', garbage.score, 0)
+
+  const good = gradeHits(
+    [
+      { title: 'esp8266 flasher standalone', url: 'https://github.com/a/b', snippet: 'esp32 flash' },
+      { title: 'ESP32 flasher projesi', url: 'https://example.com/c', snippet: 'esp8266' }
+    ],
+    query
+  )
+  check('iyi sonuç kabul', good.accepted, true)
+  check('iyi sonuç korundu', good.hits.length, 2)
+
+  // Türkçe sorgu: sözcük örtüşmesi aranmaz (İngilizce sonuçlarla eşleşmez).
+  const turkish = gradeHits(
+    [{ title: 'esp8266 flasher tool', url: 'https://github.com/x/y', snippet: '' }],
+    'benzer açık kaynak projeleri'
+  )
+  check('Türkçe sorgu kabul edilir', turkish.accepted, true)
+  check('Türkçe sorguda sonuç korunur', turkish.hits.length, 1)
+
+  // İngilizce sorgu + örtüşmeyen sonuç: eşik geçmez ama aday saklanır.
+  const weak = gradeHits(
+    [{ title: 'tamamen ilgisiz bir sayfa', url: 'https://example.com/z', snippet: '' }],
+    'quantum chromodynamics lattice'
+  )
+  check('zayıf eşleşme kabul edilmez', weak.accepted, false)
+}
+
+console.log(`TOTAL=86 FAILED=${failed}`)
 process.exit(failed === 0 ? 0 : 1)

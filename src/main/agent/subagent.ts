@@ -24,6 +24,7 @@ import {
   type StepObservation
 } from './progressGuard'
 import { logSubagent } from './subagentLog'
+import { isAiError } from '../ai/error'
 
 export type SubagentType = 'explore' | 'review' | 'general'
 
@@ -86,12 +87,40 @@ export interface SubagentOptions {
 const MAX_STEPS = 20
 const MAX_TOOL_CALLS = 30
 /**
- * Yumuşak son tarih. Ana ajan çoğunlukla `task_wait` ile 240 sn bekler;
- * alt ajan bundan uzun sürerse ana ajan zaman aşımına uğrar (canlı koşuda
- * 4 ajan 5-6 dk sürdü, ilk `task_wait` boşa gitti). Süre dolunca ajan yeni
- * araç çağırmayı bırakıp elindeki bulguları yazar.
+ * Yumuşak son tarih.
+ *
+ * ## Neden 420 sn (0.4.15)
+ *
+ * 0.4.14 canlı koşusunda iki explore ajanı 482 ve 575 sn sürdü — bütçe
+ * 210 sn'ydi ama **fiilen uygulanmıyordu**: kontrol yalnızca adım başında
+ * yapılıyor, tek bir uzun model üretimini kesemiyordu. Zaman araçlarda
+ * değildi (toplam 10-15 sn); model üretimindeydi (291 ve 423 sn tek parça).
+ *
+ * Artık bütçe **akışa** uygulanır: her LLM çağrısına kalan süre
+ * `totalTimeoutMs` olarak geçirilir. Süre dolunca üretim kesilir ve ajan
+ * elindeki metni **kısmi sonuç** olarak döndürür (`task_continue` ile
+ * sürdürülebilir). 420 sn, gözlenen uzun koşuları kapsar ama sonsuz
+ * kaçışı engeller; `EVREN_SUBAGENT_DEADLINE_MS` ile değiştirilebilir.
  */
-const DEADLINE_MS = 210_000
+function deadlineMs(): number {
+  const override = Number(process.env['EVREN_SUBAGENT_DEADLINE_MS'])
+  return Number.isFinite(override) && override >= 5_000 ? override : 420_000
+}
+
+/** Bütçenin bu oranı dolunca modele "toparla" hatırlatması gider. */
+const DEADLINE_NUDGE_RATIO = 0.75
+
+/**
+ * Son tarih yaklaşırken modele gönderilen hatırlatma.
+ *
+ * Neden: 0.4.14'te ajanlar bütçeyi aşıp tek parça 291/423 sn ürettiler.
+ * Kesilmeden önce "elindekini yaz" demek, kısmi sonucun işe yarar olmasını
+ * sağlar (Claude Code `maxTurns` davranışı).
+ */
+const SUBAGENT_DEADLINE_NUDGE =
+  'BÜTÇE UYARISI: Sürenin yaklaşık dörtte üçü doldu. Yeni geniş tarama başlatma. ' +
+  'Elindeki doğrulanmış bulguları şimdi, düzenli biçimde yaz. ' +
+  'Eksik kalan noktaları "doğrulanmadı" diye işaretle. Rapor bütçe dolduğunda kesilebilir.'
 
 /**
  * Limite takılan alt ajanı **metin yazmaya** zorlar.
@@ -361,7 +390,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       continuation: (history?.length ?? 0) > 0,
       maxSteps: MAX_STEPS,
       maxToolCalls: MAX_TOOL_CALLS,
-      deadlineMs: DEADLINE_MS
+      deadlineMs: deadlineMs()
     }
   })
   /**
@@ -399,15 +428,33 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         })
         return { ok: false, content: 'Alt ajan durduruldu.' }
       }
-      // Yumuşak son tarih: ana ajanın task_wait süresinden önce bitir.
-      if (Date.now() - startedAt > DEADLINE_MS) {
+      // Bütçe hatırlatması: son tarihin %75'i dolduysa modeli toparlamaya
+      // yönlendir. Aksi hâlde bütçe dolduğunda yarım cümleyle kesilir.
+      if (
+        nudgesSent === 0 &&
+        Date.now() - startedAt > deadlineMs() * DEADLINE_NUDGE_RATIO
+      ) {
+        nudgesSent += 1
+        messages.push({ role: 'user', content: SUBAGENT_DEADLINE_NUDGE })
         logSubagent({
           phase: 'budget',
           level: 'warn',
           taskId: subagentTaskId,
           requestId: parentRequestId,
           agentType,
-          msg: `son tarih aşıldı (${DEADLINE_MS} ms) — sentez turuna geçiliyor`,
+          msg: "bütçenin %75'i doldu — toparlama hatırlatması",
+          data: { step, toolCalls: toolCallCount, elapsedMs: Date.now() - startedAt }
+        })
+      }
+      // Yumuşak son tarih: ana ajanın task_wait süresinden önce bitir.
+      if (Date.now() - startedAt > deadlineMs()) {
+        logSubagent({
+          phase: 'budget',
+          level: 'warn',
+          taskId: subagentTaskId,
+          requestId: parentRequestId,
+          agentType,
+          msg: `son tarih aşıldı (${deadlineMs()} ms) — sentez turuna geçiliyor`,
           data: { step, toolCalls: toolCallCount, elapsedMs: Date.now() - startedAt }
         })
         const synthesized = await finalizeSubagent({
@@ -442,19 +489,72 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         tools: registry.definitions(),
         tool_choice: 'auto'
       }
-      const result = await streamWithContinuation({
-        messages: body.messages as ChatMessage[],
-        signal: controller.signal,
-        onDelta: () => undefined,
-        run: (messagesToSend) =>
-          streamCompletion(
-            baseUrl,
-            apiKey,
-            { ...body, messages: messagesToSend },
-            controller.signal,
-            () => undefined
-          )
-      })
+      /**
+       * Bütçeyi **akışa** uygula. 0.4.14'te yalnızca adım başında kontrol
+       * ediliyordu; tek bir uzun üretim (291/423 sn) bütçeyi aşabiliyordu.
+       * Kalan süre `totalTimeoutMs` olarak verilir; dolunca üretim kesilir ve
+       * aşağıdaki `catch` elindeki metni kısmi sonuca çevirir.
+       */
+      const budgetLeft = Math.max(10_000, deadlineMs() - (Date.now() - startedAt))
+      let result
+      try {
+        result = await streamWithContinuation({
+          messages: body.messages as ChatMessage[],
+          signal: controller.signal,
+          onDelta: () => undefined,
+          run: (messagesToSend) =>
+            streamCompletion(
+              baseUrl,
+              apiKey,
+              { ...body, messages: messagesToSend },
+              controller.signal,
+              () => undefined,
+              { totalTimeoutMs: Math.max(5_000, deadlineMs() - (Date.now() - startedAt)) }
+            )
+        })
+      } catch (caught) {
+        const isTimeout =
+          isAiError(caught) && caught.reason.tag === 'Timeout' && !controller.signal.aborted
+        if (!isTimeout) throw caught
+        // Zaman aşımı: üretilen metni kurtar, gerisini "kısmi" işaretle.
+        const salvaged = isAiError(caught) ? caught.partialContent : ''
+        logSubagent({
+          phase: 'budget',
+          level: 'warn',
+          taskId: subagentTaskId,
+          requestId: parentRequestId,
+          agentType,
+          msg: `akış bütçesi doldu (${Math.round(budgetLeft / 1000)} sn) — üretim kesildi`,
+          data: {
+            step,
+            toolCalls: toolCallCount,
+            elapsedMs: Date.now() - startedAt,
+            salvagedLength: salvaged.length
+          }
+        })
+        const base = (salvaged || finalContent).trim()
+        const changedTimeout = readOnly ? '' : await changedFilesReport(changesBefore)
+        const note = base
+          ? '\n\n_[Süre bütçesi doldu; rapor üretim ortasında kesildi. Eksik kısımlar ' +
+            '`task_continue` ile tamamlanabilir.]_'
+          : 'Süre bütçesi doldu ve görünür çıktı üretilmedi. `task_continue` ile ' +
+            'görevi daha dar kapsamla sürdür.'
+        logSubagent({
+          phase: 'finish',
+          level: 'warn',
+          taskId: subagentTaskId,
+          requestId: parentRequestId,
+          agentType,
+          msg: 'alt ajan kısmi sonuç döndürdü',
+          data: { partialReason: 'deadline', contentLength: base.length }
+        })
+        return {
+          ok: true,
+          content: (base + note + changedTimeout).slice(0, 12_000),
+          partial: true,
+          partialReason: 'deadline'
+        }
+      }
       if (result.content) finalContent = result.content
       onProgress?.({ step: step + 1, toolCalls: toolCallCount })
       logSubagent({
@@ -653,7 +753,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           // kadar araç çalışabilir, sonrası kesilir.
           const remaining = Math.max(
             5_000,
-            DEADLINE_MS - (Date.now() - startedAt) - 10_000
+            deadlineMs() - (Date.now() - startedAt) - 10_000
           )
           const execution = await runToolWithTimeout(
             (signal) =>

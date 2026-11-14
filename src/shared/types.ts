@@ -296,6 +296,14 @@ export interface SubagentTaskInfo {
   sessionId?: string
   agentType: SubagentType
   prompt: string
+  /** Kısa etiket: arayüz listesinde ve günlükte görev adı olarak kullanılır. */
+  description?: string
+  /**
+   * Yazma yapan ajanın sahiplendiği yollar. `task_continue` ile aynı ajan
+   * devam ettirildiğinde sahiplik yeniden alınır; aksi hâlde paralel bir
+   * general ajanı aynı dosyalara yazabilirdi.
+   */
+  ownedFiles?: string[]
   model?: string
   workspaceRoot?: string | null
   status: SubagentTaskStatus
@@ -305,6 +313,17 @@ export interface SubagentTaskInfo {
   lastAttemptAt?: number
   result?: string
   error?: string
+  /**
+   * Canlı ilerleme. `task_status` bunu döndürür: model, uzun süren bir alt
+   * ajanın takılıp takılmadığını görsün (0.4.13'te yalnızca "running"
+   * görünüyordu ve sıfır bilgi vardı).
+   */
+  progress?: {
+    step: number
+    toolCalls: number
+    lastTool?: string
+    updatedAt: number
+  }
   /**
    * Sonuç eksik: ajan adım/süre bütçesine takıldı ve elindekiyle rapor yazdı.
    * Ana ajan bunu bilmeli; "kısmi" bilgisini tahmin etmek zorunda kalmamalı.

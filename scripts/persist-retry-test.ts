@@ -147,8 +147,10 @@ app.whenReady().then(async () => {
   )
 
   // ===== 2) akış tamamlanana kadar bekle =====
+  // Tam test paketinde disk/CPU yükü altında yazma zinciri gecikebiliyor;
+  // 20 sn bazı koşularda yetmedi (flaky). 60 sn üst sınır makul.
   let finished = false
-  for (let index = 0; index < 200 && !finished; index++) {
+  for (let index = 0; index < 600 && !finished; index++) {
     await sleep(100)
     await __resetCacheForTests()
     const stored = await getSession(session.id)

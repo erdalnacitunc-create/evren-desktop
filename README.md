@@ -188,6 +188,39 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.14 Beta — alt ajan bekleme kusuru, devam ettirme, ayrıntılı izleme
+
+Canlı takipte iki kusur bulundu: `task_wait` zaman aşımı **hata gibi** dönüyordu
+(alt ajan 186 sn'de bitip 4820 kr sonuç üretti, ana ajan hiç almadı) ve ilerleme
+güncellemesi bekleyen `task_wait`'i erken uyandırıyordu. İkisi de düzeltildi.
+
+## Yeni davranış
+
+| | Önce | Şimdi |
+|---|---|---|
+| Görev sürerken `task_wait` | `ok:false` + tüm görev JSON'u | **`ok:true`** + "hâlâ çalışıyor, hata değil" + ilerleme |
+| Sonuç teslimi | yalnızca `task_wait` | + **tur içi otomatik bildirim** (opencode `<subagent>`) |
+| Biten ajanı sürdürme | yok | **`task_continue`** (Claude Code `resume`) |
+| `task_status` | tam JSON (istem dâhil) | kompakt özet + adım/araç ilerlemesi |
+| Alt ajan izleme | `main.log` tek satır | **`subagent-events.jsonl`** + `task_logs` aracı |
+| `spawn_agent` | istem | + kısa `description` |
+
+İzleme günlüğü her araç çağrısını **süresiyle**, bütçe kesintilerini, izin/araç
+hatalarını ve durum geçişlerini kaydeder; sırlar maskelenir. Karşılaştırma:
+`docs/SUBAGENT-ARCHITECTURE.md`.
+
+## Doğrulama
+
+| Paket | Kontrol |
+|---|---|
+| `subagent-log-test` | 21 |
+| `subagent-wait-test` | 21 |
+| `agent-subagent-limit-test` | 46 |
+| `file-ownership-*` | 78 |
+
+Toplam: **66 paket / 1553 kontrol** (önceki 64/1511). typecheck ✓ build ✓ e2e ✓
+Ayrıntı: `docs/RELEASE-0.4.14.md`.
+
 # 0.4.13 Beta — dosya sahipliği (Katman A)
 
 Paralel kodlama güvenli hâle geldi: **iki alt ajan aynı dosyaya yazamaz.**

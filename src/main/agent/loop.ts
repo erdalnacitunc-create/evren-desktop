@@ -54,6 +54,12 @@ import {
 } from './progressGuard'
 import { runSubagent } from './subagent'
 import {
+  formatSubagentLogs,
+  logSubagent,
+  readSubagentLogs,
+  summarizeSubagentLogs
+} from './subagentLog'
+import {
   cancelSubagentTask,
   createSubagentTask,
   getSubagentTask,
@@ -304,14 +310,45 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
   const ownership = createOwnershipTable()
   /** Bu istekte açılan alt ajan görevleri (yinelenen işi engellemek için). */
   const spawnedPrompts: string[] = []
+  /**
+   * Arka planda biten alt ajan bildirimleri.
+   *
+   * opencode'da ebeveyn, çocuk boşta kalınca `<subagent>` mesajı alır ve
+   * turunu bitirmeden sonucu kullanabilir. Bizde `task_wait` bloklayıcıydı:
+   * canlı koşuda ajan 120 sn bekledi, alt ajan 186 sn'de bitti ve sonuç
+   * kayboldu. Bu kuyruk, biten görevleri **bir sonraki adımda** konuşmaya
+   * ekler; model beklemeden ilerleyebilir veya sonucu alabilir.
+   */
+  const pendingSubagentNotices: string[] = []
+  const enqueueSubagentNotice = (task: {
+    id: string
+    agentType: string
+    description?: string
+    status: string
+    partial?: boolean
+    partialReason?: string
+  }): void => {
+    const label = task.description ? `${task.description} · ` : ''
+    const partialNote = task.partial ? ` [KISMİ — ${task.partialReason ?? 'bütçe'}]` : ''
+    pendingSubagentNotices.push(
+      `ALT AJAN BİLDİRİMİ: ${label}${task.agentType} (${task.id.slice(0, 12)}) ` +
+        `durum=${task.status}${partialNote}. ` +
+        'Sonucu `task_wait` ile al veya gerekmiyorsa yok say; bekleme.'
+    )
+    // Bildirimi ayrıca arayüze düş: kullanıcı da görsün.
+    log.info(`Alt ajan bildirimi kuyruğa alındı: ${task.id.slice(0, 12)} ${task.status}`)
+  }
 
-  const executeSubagent = (
-    agentType: 'explore' | 'review' | 'general',
-    prompt: string,
-    childController: AbortController,
-    subagentTaskId?: string,
+  const executeSubagent = (params: {
+    agentType: 'explore' | 'review' | 'general'
+    prompt: string
+    childController: AbortController
+    subagentTaskId?: string
     ownedFiles?: string[]
-  ): Promise<{
+    description?: string
+    history?: ChatMessage[]
+    onProgress?: (progress: { step: number; toolCalls: number; lastTool?: string }) => void
+  }): Promise<{
     ok: boolean
     content: string
     partial?: boolean
@@ -325,16 +362,19 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       // değiştirirse alt ajanlar da o modelle koşar; ayrı bir model seçimi
       // yoktur (bkz. docs/HYBRID-AGENT-ARCHITECTURE.md §6).
       model: payload.model,
-      agentType,
-      prompt,
+      agentType: params.agentType,
+      prompt: params.prompt,
       workspaceRoot,
       sessionId: payload.sessionId,
-      subagentTaskId,
-      ownedFiles,
+      subagentTaskId: params.subagentTaskId,
+      ownedFiles: params.ownedFiles,
+      description: params.description,
+      history: params.history,
+      onProgress: params.onProgress,
       mode,
       profile,
       permissions: settings.permissions,
-      controller: childController,
+      controller: params.childController,
       send,
       approval: options.approval
     })
@@ -344,13 +384,44 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       agentType: 'explore' | 'review' | 'general',
       prompt: string,
       background: boolean,
-      files?: string[]
+      files?: string[],
+      description?: string,
+      /**
+       * Devam ettirilen görevin kimliği. Verilirse yeni görev **oluşturulmaz**;
+       * mevcut kayıt yeniden `running` olur (Claude Code `resume`, opencode
+       * aynı `sessionID`'ye follow-up).
+       */
+      continueTaskId?: string,
+      history?: ChatMessage[]
     ) => {
+      const label = description?.trim() || prompt.slice(0, 60)
+      logSubagent({
+        phase: 'spawn',
+        requestId,
+        agentType,
+        msg: `spawn istendi — ${label}`,
+        data: {
+          background,
+          files: files ?? [],
+          promptLength: prompt.length,
+          description: description ?? null,
+          active: subagentGate.snapshot().active,
+          used: subagentGate.snapshot().used[requestId] ?? 0
+        }
+      })
       // Aynı işi iki kez açmayı engelle. Canlı koşularda modeller bazen
       // neredeyse aynı görevi iki kez başlatıyordu; bu hem token hem süre
       // kaybı. Benzerlik eşiği `DUPLICATE_TASK_SIMILARITY`.
-      if (isDuplicateTask(prompt, spawnedPrompts)) {
+      if (!continueTaskId && isDuplicateTask(prompt, spawnedPrompts)) {
         log.warn(`Yinelenen alt ajan isteği reddedildi: ${prompt.slice(0, 80)}`)
+        logSubagent({
+          phase: 'spawn',
+          level: 'warn',
+          requestId,
+          agentType,
+          msg: 'yinelenen görev reddedildi',
+          data: { prompt: prompt.slice(0, 200) }
+        })
         return {
           ok: false,
           content:
@@ -375,6 +446,13 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         // Yazma yapan ajan dosya bildirmezse sahiplik kurulamaz; iki general
         // ajanı aynı dosyaya yazabilir. Bunu spawn anında söylemek, sonradan
         // kaybolan değişiklikten iyidir.
+        logSubagent({
+          phase: 'ownership',
+          level: 'warn',
+          requestId,
+          agentType,
+          msg: 'general ajan files listesi olmadan istendi — reddedildi'
+        })
         return {
           ok: false,
           content:
@@ -386,11 +464,31 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
 
       // Bütçe ve eşzamanlılık kapısı. Reddedilirse modele net bir açıklama
       // döner: yeniden denemek yerine elindekiyle devam etmeli.
+      const gateStartedAt = Date.now()
       try {
         await subagentGate.acquire(requestId, controller.signal)
+        logSubagent({
+          phase: 'gate',
+          requestId,
+          agentType,
+          msg: 'eşzamanlılık kapısı açıldı',
+          data: { waitedMs: Date.now() - gateStartedAt, ...subagentGate.snapshot() }
+        })
       } catch (error) {
         const content = limitMessage(error, subagentGate.snapshot(), requestId)
         log.warn(`Alt ajan reddedildi: ${content}`)
+        logSubagent({
+          phase: 'gate',
+          level: 'warn',
+          requestId,
+          agentType,
+          msg: 'eşzamanlılık kapısı reddetti',
+          data: {
+            reason: (error as { reason?: string } | undefined)?.reason,
+            waitedMs: Date.now() - gateStartedAt,
+            ...subagentGate.snapshot()
+          }
+        })
         return { ok: false, content }
       }
 
@@ -403,23 +501,46 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         const claim = ownership.claim({ id: claimId, agentType, paths: ownedFiles })
         if (!claim.ok) {
           log.warn(`Dosya sahipliği çakışması: ${claim.conflicts.length} yol`)
+          logSubagent({
+            phase: 'ownership',
+            level: 'warn',
+            requestId,
+            agentType,
+            msg: 'dosya sahipliği çakışması — reddedildi',
+            data: {
+              files: ownedFiles,
+              conflicts: claim.conflicts.map((conflict) => ({
+                path: conflict.path,
+                ownerType: conflict.ownerType,
+                ownerId: conflict.ownerId.slice(0, 12),
+                ownerPaths: conflict.ownerPaths
+              }))
+            }
+          })
           claimId = null
           // Hiç koşmadı: slot ve bütçe iade edilir, aksi hâlde çakışma denemesi
           // de bütçe yakardı.
           subagentGate.refund(requestId)
           return { ok: false, content: conflictMessage(claim.conflicts) }
         }
+        logSubagent({
+          phase: 'ownership',
+          requestId,
+          agentType,
+          msg: 'dosya sahipliği alındı',
+          data: { files: ownedFiles, claimId }
+        })
       }
 
       if (!background) {
         try {
-          const result = await executeSubagent(
+          const result = await executeSubagent({
             agentType,
             prompt,
-            controller,
-            undefined,
-            needsOwnership ? ownedFiles : undefined
-          )
+            childController: controller,
+            ownedFiles: needsOwnership ? ownedFiles : undefined,
+            description
+          })
           // Kısmi sonuç açıkça etiketlenir: ana ajan tahmin etmek zorunda kalmasın.
           const marker = result.partial ? `[KISMİ — ${result.partialReason}]` : ''
           return {
@@ -434,7 +555,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         }
       }
 
-      const taskId = `sub-${randomUUID()}`
+      const taskId = continueTaskId ?? `sub-${randomUUID()}`
       const childController = new AbortController()
       const onParentAbort = (): void => {
         childController.abort()
@@ -445,27 +566,62 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         }
       }
       controller.signal.addEventListener('abort', onParentAbort, { once: true })
-      const info = createSubagentTask(
-        {
-          id: taskId,
-          requestId,
-          sessionId: payload.sessionId,
-          agentType,
-          prompt,
-          model: payload.model,
-          workspaceRoot
-        },
-        () => childController.abort()
-      )
+
+      let info
+      if (continueTaskId) {
+        // Devam: mevcut kayıt yeniden çalışır. Yeni görev açmak geçmişi ve
+        // deneme sayısını kaybettirirdi.
+        info =
+          updateSubagentTask(continueTaskId, {
+            status: 'running',
+            result: undefined,
+            error: undefined,
+            partial: undefined,
+            partialReason: undefined,
+            progress: undefined,
+            finishedAt: undefined,
+            attempts: (getSubagentTask(continueTaskId)?.attempts ?? 1) + 1,
+            lastAttemptAt: Date.now()
+          }) ?? null
+        if (!info) {
+          subagentGate.refund(requestId)
+          if (claimId) ownership.release(claimId)
+          controller.signal.removeEventListener('abort', onParentAbort)
+          return { ok: false, content: `Görev bulunamadı: ${continueTaskId}` }
+        }
+      } else {
+        info = createSubagentTask(
+          {
+            id: taskId,
+            requestId,
+            sessionId: payload.sessionId,
+            agentType,
+            prompt,
+            description,
+            ownedFiles: needsOwnership ? ownedFiles : undefined,
+            model: payload.model,
+            workspaceRoot
+          },
+          () => childController.abort()
+        )
+      }
+      // Görev kaydında iptal işleyicisi güncel olmalı.
       send({ requestId, type: 'subagent-task', task: info })
 
-      void executeSubagent(
+      void executeSubagent({
         agentType,
         prompt,
         childController,
-        taskId,
-        needsOwnership ? ownedFiles : undefined
-      )
+        subagentTaskId: taskId,
+        ownedFiles: needsOwnership ? ownedFiles : undefined,
+        description,
+        history,
+        onProgress: (progress) => {
+          updateSubagentTask(taskId, {
+            progress: { ...progress, updatedAt: Date.now() }
+          })
+        }
+      })
         .then((result) => {
           if (childController.signal.aborted) {
             updateSubagentTask(taskId, {
@@ -482,15 +638,33 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             })
           }
           const updated = getSubagentTask(taskId)
-          if (updated) send({ requestId, type: 'subagent-task', task: updated })
+          if (updated) {
+            send({ requestId, type: 'subagent-task', task: updated })
+            // Ebeveyn hâlâ çalışıyorsa bildirimi bir sonraki adımda konuşmaya
+            // ekle (opencode'un `<subagent>` mesajı). Tur bittiyse kuyruk
+            // zararsızca atılır; sonuç `task_wait` ile yine alınabilir.
+            enqueueSubagentNotice(updated)
+          }
         })
         .catch((error) => {
           updateSubagentTask(taskId, {
             status: 'error',
             error: error instanceof Error ? error.message : String(error)
           })
+          logSubagent({
+            phase: 'error',
+            level: 'error',
+            taskId,
+            requestId,
+            agentType,
+            msg: 'arka plan alt ajanı hata ile sonlandı',
+            data: { error: error instanceof Error ? error.message : String(error) }
+          })
           const updated = getSubagentTask(taskId)
-          if (updated) send({ requestId, type: 'subagent-task', task: updated })
+          if (updated) {
+            send({ requestId, type: 'subagent-task', task: updated })
+            enqueueSubagentNotice(updated)
+          }
         })
         .finally(() => {
           controller.signal.removeEventListener('abort', onParentAbort)
@@ -501,18 +675,79 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       return {
         ok: true,
         content:
-          `Arka plan alt ajanı başlatıldı: ${taskId} (${agentType}).\n` +
-          'Sonucu `task_wait` veya `task_status` ile alabilirsin.'
+          (continueTaskId
+            ? `Alt ajan devam ettirildi: ${taskId} (${agentType}, deneme ${info.attempts ?? 1}).`
+            : `Arka plan alt ajanı başlatıldı: ${taskId} (${agentType}).`) +
+          '\nSonucu `task_wait` veya `task_status` ile alabilirsin. Beklemek zorunda değilsin; ' +
+          'görev bitince otomatik bildirim gelir.'
       }
     },
     status: async (taskId: string) => {
       const info = getSubagentTask(taskId)
       if (!info) return { ok: false, content: `Görev bulunamadı: ${taskId}` }
-      return { ok: true, content: JSON.stringify(info, null, 2) }
+      // Kompakt özet: önceden tüm kayıt (görev istemi dâhil) JSON olarak
+      // dökülüyordu ve her çağrı 800+ karakter bağlam yakıyordu.
+      const elapsed = Math.round(
+        ((info.finishedAt ?? Date.now()) - info.createdAt) / 1000
+      )
+      const lines = [
+        `${info.agentType} · ${info.id}`,
+        `durum: ${info.status}${info.partial ? ` (kısmi — ${info.partialReason ?? 'bütçe'})` : ''}`,
+        `süre: ${elapsed} sn · deneme: ${info.attempts ?? 1}`
+      ]
+      if (info.description) lines.push(`etiket: ${info.description}`)
+      if (info.progress) {
+        lines.push(
+          `ilerleme: adım ${info.progress.step} · araç ${info.progress.toolCalls}` +
+            (info.progress.lastTool ? ` · son araç: ${info.progress.lastTool}` : '')
+        )
+      }
+      if (info.status === 'error' && info.error) {
+        lines.push(`hata: ${info.error.slice(0, 500)}`)
+      }
+      if (info.status === 'done' && info.result) {
+        lines.push(`sonuç: ${info.result.length} kr — tam metin için \`task_wait\``)
+      }
+      if (info.status === 'running') {
+        lines.push(
+          `takıldı mı? ${elapsed > 120 ? 'uzun sürüyor, task_logs ile ayrıntıya bak' : 'normal'}`
+        )
+      }
+      return { ok: true, content: lines.join('\n') }
     },
     wait: async (taskId: string, timeoutMs: number) => {
       const info = await waitForSubagentTask(taskId, timeoutMs)
       if (!info) return { ok: false, content: `Görev bulunamadı: ${taskId}` }
+      const elapsed = Math.round(((info.finishedAt ?? Date.now()) - info.createdAt) / 1000)
+
+      if (info.status === 'running') {
+        // ÖNEMLİ: zaman aşımı bir hata değildir. 0.4.13'te `ok:false`
+        // dönüyordu ve tüm görev JSON'u bağlama basılıyordu; model bunu
+        // kalıcı hata sanıp sonucu hiç almadı (canlı koşuda ajan 186 sn'de
+        // bitti, sonuç kayboldu).
+        logSubagent({
+          phase: 'state',
+          level: 'info',
+          taskId,
+          requestId: info.requestId,
+          agentType: info.agentType,
+          msg: 'task_wait zaman aşımı — görev hâlâ çalışıyor',
+          data: { elapsedMs: elapsed * 1000, progress: info.progress ?? null }
+        })
+        const progress = info.progress
+          ? ` · adım ${info.progress.step}, araç ${info.progress.toolCalls}` +
+            (info.progress.lastTool ? `, son araç: ${info.progress.lastTool}` : '')
+          : ''
+        return {
+          ok: true,
+          content:
+            `Görev hâlâ çalışıyor (${elapsed} sn)${progress}. Bu bir hata değil.\n` +
+            'Beklemek zorunda değilsin: başka işe devam edebilirsin, görev bitince ' +
+            'otomatik bildirim gelir. Sonucu hemen istiyorsan `task_wait` ile ' +
+            'tekrar bekle veya `task_status` ile ilerlemeyi gör.'
+        }
+      }
+
       if (info.status === 'done') {
         const marker = info.partial ? `[KISMİ — ${info.partialReason ?? 'bütçe'}]` : ''
         return {
@@ -522,7 +757,70 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             (info.result ?? '(sonuç yok)')
         }
       }
-      return { ok: false, content: JSON.stringify(info, null, 2) }
+
+      const reason =
+        info.status === 'error'
+          ? `Hata: ${info.error ?? 'bilinmeyen'}`
+          : info.status === 'cancelled'
+            ? 'Görev iptal edildi.'
+            : info.status === 'interrupted'
+              ? 'Görev kesintiye uğradı (uygulama yeniden başladı).'
+              : `Durum: ${info.status}`
+      return { ok: false, content: `${reason}\n\`task_continue\` ile aynı ajanı devam ettirebilirsin.` }
+    },
+    continue: async (taskId: string, prompt: string, files?: string[]) => {
+      const info = getSubagentTask(taskId)
+      if (!info) return { ok: false, content: `Görev bulunamadı: ${taskId}` }
+      if (info.status === 'running') {
+        return {
+          ok: false,
+          content: 'Görev hâlâ çalışıyor. Önce `task_wait` ile bitmesini bekle veya `task_cancel` ile durdur.'
+        }
+      }
+      const followUp = String(prompt ?? '').trim()
+      if (!followUp) return { ok: false, content: 'Devam istemi boş olamaz.' }
+
+      const owned =
+        Array.isArray(files) && files.length > 0
+          ? files.map((value) => String(value)).filter(Boolean)
+          : info.ownedFiles
+      if (info.agentType === 'general' && (!owned || owned.length === 0)) {
+        return {
+          ok: false,
+          content:
+            'General ajanı devam ettirmek için `files` gerekli (hangi dosyalara yazabileceği).'
+        }
+      }
+
+      // Önceki tur bağlam olarak verilir: ajan sıfırdan başlamasın.
+      const history: ChatMessage[] = [{ role: 'user', content: info.prompt }]
+      if (info.result) {
+        history.push({ role: 'assistant', content: info.result })
+      } else if (info.error) {
+        history.push({
+          role: 'assistant',
+          content: `Önceki deneme hata verdi: ${info.error.slice(0, 1500)}`
+        })
+      }
+
+      logSubagent({
+        phase: 'resume',
+        requestId,
+        agentType: info.agentType,
+        msg: `devam istendi — ${followUp.slice(0, 80)}`,
+        data: { taskId, previousStatus: info.status, attempts: info.attempts ?? 1 }
+      })
+
+      const started = await subagentTasks.spawn(
+        info.agentType,
+        followUp,
+        true,
+        owned,
+        info.description,
+        taskId,
+        history
+      )
+      return started
     },
     cancel: async (taskId: string) => {
       const info = getSubagentTask(taskId)
@@ -530,14 +828,54 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       const cancelled = cancelSubagentTask(taskId)
       const updated = getSubagentTask(taskId)
       if (updated) send({ requestId, type: 'subagent-task', task: updated })
+      logSubagent({
+        phase: 'state',
+        level: cancelled ? 'warn' : 'info',
+        taskId,
+        requestId,
+        agentType: info.agentType,
+        msg: cancelled ? 'görev iptal edildi' : 'iptal istendi ama görev çalışmıyor'
+      })
       return {
         ok: cancelled,
         content: cancelled ? `Görev iptal edildi: ${taskId}` : `Görev çalışmıyor: ${taskId}`
       }
     },
+    logs: async (taskId: string | undefined, limit: number | undefined) => {
+      const events = readSubagentLogs({
+        taskId,
+        requestId: taskId ? undefined : requestId,
+        limit: limit ?? 60
+      })
+      const summary = summarizeSubagentLogs({
+        taskId,
+        requestId: taskId ? undefined : requestId
+      })
+      const header =
+        `Alt ajan günlüğü — ${events.length} olay · hata ${summary.errors} · uyarı ${summary.warnings}` +
+        (summary.firstAt && summary.lastAt
+          ? ` · ${Math.round((summary.lastAt - summary.firstAt) / 1000)} sn`
+          : '')
+      return {
+        ok: true,
+        content: `${header}\n\n${formatSubagentLogs(events)}`
+      }
+    },
     list: async () => {
       const tasks = listSubagentTasks(payload.sessionId)
-      return { ok: true, content: JSON.stringify(tasks, null, 2) }
+      const compact = tasks.map((task) => {
+        const elapsed = Math.round(((task.finishedAt ?? Date.now()) - task.createdAt) / 1000)
+        return {
+          id: task.id,
+          agentType: task.agentType,
+          description: task.description,
+          status: task.status,
+          partial: task.partial ?? false,
+          seconds: elapsed,
+          toolCalls: task.progress?.toolCalls ?? 0
+        }
+      })
+      return { ok: true, content: JSON.stringify(compact, null, 2) }
     }
   }
 
@@ -614,6 +952,15 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     '\n- **Paralel kodlama:** yazma yapacak ajana (general) mutlaka `files` ver. ' +
     'Her ajana AYRI dosya kümesi: iki ajana aynı dosya verilmez (sistem reddeder). ' +
     'Örnek: [{general, files:["src/auth/"]}, {general, files:["src/billing/"]}].' +
+    '\n- Her `spawn_agent` çağrısına kısa bir `description` ver (3-8 kelime): arayüzde ve ' +
+    'günlükte görev adı olarak görünür.' +
+    '\n- `task_wait` zaman aşımı **hata değildir**: "hâlâ çalışıyor" döner. Beklemek yerine ' +
+    'başka işe devam et; görev bitince otomatik bildirim gelir. Sonucu hemen istiyorsan ' +
+    'yeniden `task_wait` çağır.' +
+    '\n- Kısmi sonuç (`[KISMİ — tools/steps/deadline]`) eksik demektir; eksik kısmı ' +
+    '`task_continue` ile aynı ajana tamamlat veya kendin yap.' +
+    '\n- Bir alt ajan takıldı/garip sonuç verdi diye düşünüyorsan `task_logs` ile adım, ' +
+    'araç süresi ve hata kaydını oku.' +
     '\n- Kod incelemesi veya risk taraması → `review` alt ajanı.' +
     '\n- Bağımsız, çok adımlı uygulama işi → `general` alt ajanı.' +
     '\n- Tek dosya, tek komut veya zaten bildiğin bir yerde arama → **devretme**, doğrudan yap.' +
@@ -685,13 +1032,24 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
    */
   const applySteering = (pendingAssistant?: string): boolean => {
     const texts = drainSteering(requestId)
-    if (texts.length === 0) return false
+    const notices = pendingSubagentNotices.splice(0)
+    if (texts.length === 0 && notices.length === 0) return false
     if (pendingAssistant !== undefined && pendingAssistant.trim().length > 0) {
       messages.push({ role: 'assistant', content: pendingAssistant })
     }
     for (const text of texts) {
       messages.push({ role: 'user', content: text })
       send({ requestId, type: 'steering', text })
+    }
+    // Alt ajan bildirimleri kullanıcı iletisi değildir; makine etiketiyle
+    // `user` rolünde verilir. `system` rolünü konuşmanın ortasına koymak bazı
+    // sağlayıcılarda reddedilir; Claude Code da `<system-reminder>` bloğunu
+    // kullanıcı iletisi içinde taşır.
+    for (const notice of notices) {
+      messages.push({
+        role: 'user',
+        content: `<subagent-notification>\n${notice}\n</subagent-notification>`
+      })
     }
     return true
   }

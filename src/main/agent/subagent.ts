@@ -23,6 +23,7 @@ import {
   shouldNudgeProgress,
   type StepObservation
 } from './progressGuard'
+import { logSubagent } from './subagentLog'
 
 export type SubagentType = 'explore' | 'review' | 'general'
 
@@ -48,6 +49,27 @@ export interface SubagentOptions {
    * Doluysa araç düzeyinde zorlanır — liste dışına yazma reddedilir.
    */
   ownedFiles?: string[]
+  /** Kısa etiket: arayüzde ve alt ajan günlüğünde görünür. */
+  description?: string
+  /**
+   * Devam ettirilen konuşmanın önceki iletileri.
+   *
+   * `task_continue` ile aynı alt ajan yeniden çalıştırıldığında önceki
+   * görev ve sonuç buraya konur; ajan sıfırdan başlamaz. opencode aynı
+   * çocuk oturumuna (`sessionID`) mesaj ekleyerek yapar; Claude Code
+   * `resume` ile. Bizde araç döngüsü durumsuz olduğu için özet geçmiş
+   * yeterli: ajanın amacı, önceki bulguları ve yeni istek.
+   */
+  history?: ChatMessage[]
+  /**
+   * Canlı ilerleme bildirimi. Ana ajan `task_status` ile "takıldı mı, kaç
+   * araç kullandı" görebilsin diye her adım/araçta çağrılır.
+   */
+  onProgress?: (progress: {
+    step: number
+    toolCalls: number
+    lastTool?: string
+  }) => void
 }
 
 /**
@@ -281,7 +303,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
     controller,
     send,
     subagentTaskId,
-    ownedFiles
+    ownedFiles,
+    description,
+    history,
+    onProgress
   } = options
 
   const skills = await loadEnabledSkills()
@@ -313,10 +338,32 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         skillCatalog.text +
         buildSkillHint(routedForCatalog)
     },
+    // Devam turunda önceki görev ve sonuç bağlam olarak eklenir. Aksi hâlde
+    // "devam et" isteği sıfırdan bir koşuya dönüşür ve ajan neyi sürdürdüğünü
+    // bilemez (opencode'un aynı çocuk oturumuna mesaj eklemesi gibi).
+    ...(history ?? []),
     { role: 'user', content: prompt }
   ]
   const request: ChatRequest = { model, messages }
   const startedAt = Date.now()
+  logSubagent({
+    phase: 'start',
+    taskId: subagentTaskId,
+    requestId: parentRequestId,
+    agentType,
+    msg: `alt ajan başladı${description ? ` — ${description}` : ''}`,
+    data: {
+      model,
+      readOnly,
+      ownedFiles: ownedFiles ?? [],
+      promptLength: prompt.length,
+      workspaceRoot: workspaceRoot ?? null,
+      continuation: (history?.length ?? 0) > 0,
+      maxSteps: MAX_STEPS,
+      maxToolCalls: MAX_TOOL_CALLS,
+      deadlineMs: DEADLINE_MS
+    }
+  })
   /**
    * Yazma yetkili alt ajan (general) hangi dosyaları değiştirdi?
    *
@@ -341,10 +388,28 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
   try {
     for (let step = 0; step < MAX_STEPS; step += 1) {
       if (controller.signal.aborted) {
+        logSubagent({
+          phase: 'finish',
+          level: 'warn',
+          taskId: subagentTaskId,
+          requestId: parentRequestId,
+          agentType,
+          msg: 'alt ajan iptal edildi',
+          data: { step, toolCalls: toolCallCount, elapsedMs: Date.now() - startedAt }
+        })
         return { ok: false, content: 'Alt ajan durduruldu.' }
       }
       // Yumuşak son tarih: ana ajanın task_wait süresinden önce bitir.
       if (Date.now() - startedAt > DEADLINE_MS) {
+        logSubagent({
+          phase: 'budget',
+          level: 'warn',
+          taskId: subagentTaskId,
+          requestId: parentRequestId,
+          agentType,
+          msg: `son tarih aşıldı (${DEADLINE_MS} ms) — sentez turuna geçiliyor`,
+          data: { step, toolCalls: toolCallCount, elapsedMs: Date.now() - startedAt }
+        })
         const synthesized = await finalizeSubagent({
           messages,
           request,
@@ -355,6 +420,15 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           reason: 'deadline'
         })
         const changedDeadline = readOnly ? '' : await changedFilesReport(changesBefore)
+        logSubagent({
+          phase: 'finish',
+          level: 'warn',
+          taskId: subagentTaskId,
+          requestId: parentRequestId,
+          agentType,
+          msg: 'alt ajan kısmi sonuç döndürdü',
+          data: { partialReason: 'deadline', contentLength: synthesized.length }
+        })
         return {
           ok: true,
           content: (synthesized + changedDeadline).slice(0, 12_000),
@@ -382,9 +456,36 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           )
       })
       if (result.content) finalContent = result.content
+      onProgress?.({ step: step + 1, toolCalls: toolCallCount })
+      logSubagent({
+        phase: 'step',
+        taskId: subagentTaskId,
+        requestId: parentRequestId,
+        agentType,
+        msg: `adım ${step + 1}/${MAX_STEPS}`,
+        data: {
+          step: step + 1,
+          contentLength: (result.content ?? '').length,
+          toolCalls: result.toolCalls.length,
+          finishReason: result.finishReason ?? null,
+          elapsedMs: Date.now() - startedAt
+        }
+      })
 
       if (result.toolCalls.length === 0) {
         const changed = readOnly ? '' : await changedFilesReport(changesBefore)
+        logSubagent({
+          phase: 'finish',
+          taskId: subagentTaskId,
+          requestId: parentRequestId,
+          agentType,
+          msg: 'alt ajan tamamlandı',
+          data: {
+            steps: step + 1,
+            toolCalls: toolCallCount,
+            elapsedMs: Date.now() - startedAt,
+            contentLength: finalContent.length          }
+        })
         return {
           ok: true,
           content: ((finalContent || 'Alt ajan bir sonuç üretmedi.') + changed).slice(0, 12_000)
@@ -406,6 +507,15 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           return { ok: false, content: 'Alt ajan durduruldu.' }
         }
         if (toolCallCount >= MAX_TOOL_CALLS) {
+          logSubagent({
+            phase: 'budget',
+            level: 'warn',
+            taskId: subagentTaskId,
+            requestId: parentRequestId,
+            agentType,
+            msg: `araç bütçesi doldu (${MAX_TOOL_CALLS}) — sentez turuna geçiliyor`,
+            data: { step, toolCalls: toolCallCount, elapsedMs: Date.now() - startedAt }
+          })
           const synthesized = await finalizeSubagent({
             messages,
             request,
@@ -416,6 +526,15 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             reason: 'tools'
           })
           const changedTools = readOnly ? '' : await changedFilesReport(changesBefore)
+          logSubagent({
+            phase: 'finish',
+            level: 'warn',
+            taskId: subagentTaskId,
+            requestId: parentRequestId,
+            agentType,
+            msg: 'alt ajan kısmi sonuç döndürdü',
+            data: { partialReason: 'tools', contentLength: synthesized.length }
+          })
           return {
             ok: true,
             content: (synthesized + changedTools).slice(0, 12_000),
@@ -424,6 +543,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           }
         }
         toolCallCount += 1
+        onProgress?.({ step, toolCalls: toolCallCount, lastTool: call.name })
+        /** Araç süresi: yavaş araçları (PowerShell -Recurse, ağ) ayırt etmek için. */
+        const toolStartedAt = Date.now()
 
         // Araç çağrısını **yayınla**: önceden yalnızca sonuç gidiyordu, bu
         // yüzden arayüz alt ajanın ne yaptığını gösteremiyor ve testler
@@ -443,10 +565,19 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         const tool = registry.get(call.name)
         if (!tool) {
           const content = unknownToolMessage(call.name, registry.names())
+          logSubagent({
+            phase: 'tool',
+            level: 'warn',
+            taskId: subagentTaskId,
+            requestId: parentRequestId,
+            agentType,
+            msg: `bilinmeyen araç: ${call.name}`,
+            data: { tool: call.name, available: registry.names().slice(0, 20) }
+          })
           send({
             requestId: parentRequestId,
             type: 'tool-result',
-            result: { toolCallId: call.id, name: call.name, ok: false, content }
+            result: { toolCallId: call.id, name: call.name, ok: false, content, agentType, subagentTaskId }
           })
           messages.push({ role: 'tool', tool_call_id: call.id, content })
           continue
@@ -458,6 +589,15 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         const permission = resolvePermission(permissions, mode, profile, category, resource)
         if (permission === 'deny') {
           const content = `Alt ajan için izin verilmedi (${category}).`
+          logSubagent({
+            phase: 'tool',
+            level: 'warn',
+            taskId: subagentTaskId,
+            requestId: parentRequestId,
+            agentType,
+            msg: `${call.name} izin politikası tarafından engellendi`,
+            data: { tool: call.name, category, resource, mode, profile }
+          })
           send({
             requestId: parentRequestId,
             type: 'tool-result',
@@ -527,6 +667,22 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             controller.signal,
             Math.min(TOOL_TIMEOUT_MS, remaining)
           )
+          logSubagent({
+            phase: 'tool',
+            level: execution.ok ? 'info' : 'warn',
+            taskId: subagentTaskId,
+            requestId: parentRequestId,
+            agentType,
+            msg: `${call.name} ${execution.ok ? 'ok' : 'başarısız'}`,
+            data: {
+              tool: call.name,
+              ok: execution.ok,
+              durationMs: Date.now() - toolStartedAt,
+              timeoutMs: Math.min(TOOL_TIMEOUT_MS, remaining),
+              resultLength: execution.content.length,
+              error: execution.ok ? undefined : execution.content.slice(0, 300)
+            }
+          })
           // Sonucu yayınla. 0.4.13'e kadar alt ajan yalnızca `tool-call`
           // gönderiyordu; arayüz ve testler sonucu hiç göremiyordu. Bu,
           // dosya sahipliği ihlalinin görünmez kalmasına da yol açıyordu.
@@ -550,6 +706,21 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           const content = `Alt ajan araç hatası: ${
             error instanceof Error ? error.message : String(error)
           }`
+          logSubagent({
+            phase: 'tool',
+            level: 'error',
+            taskId: subagentTaskId,
+            requestId: parentRequestId,
+            agentType,
+            msg: `${call.name} araç hatası`,
+            data: {
+              tool: call.name,
+              ok: false,
+              durationMs: Date.now() - toolStartedAt,
+              timeoutMs: TOOL_TIMEOUT_MS,
+              error: error instanceof Error ? error.message : String(error)
+            }
+          })
           send({
             requestId: parentRequestId,
             type: 'tool-result',
@@ -581,6 +752,15 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
 
     // Adım limiti: boş sonuç döndürmek yerine sentez turu zorla.
     // Canlı koşuda 4 ajanın 4'ü de boş döndü; ana ajan hiçbir bulgu alamadı.
+    logSubagent({
+      phase: 'budget',
+      level: 'warn',
+      taskId: subagentTaskId,
+      requestId: parentRequestId,
+      agentType,
+      msg: `adım bütçesi doldu (${MAX_STEPS}) — sentez turuna geçiliyor`,
+      data: { toolCalls: toolCallCount, elapsedMs: Date.now() - startedAt }
+    })
     const synthesized = await finalizeSubagent({
       messages,
       request,
@@ -591,12 +771,38 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       reason: 'steps'
     })
     const changedSteps = readOnly ? '' : await changedFilesReport(changesBefore)
+    logSubagent({
+      phase: 'finish',
+      level: 'warn',
+      taskId: subagentTaskId,
+      requestId: parentRequestId,
+      agentType,
+      msg: 'alt ajan kısmi sonuç döndürdü',
+      data: { partialReason: 'steps', contentLength: synthesized.length }
+    })
     return {
       ok: true,
       content: (synthesized + changedSteps).slice(0, 12_000),
       partial: true,
       partialReason: 'steps'
     }
+  } catch (error) {
+    // Beklenmeyen hata: yeniden fırlatmadan önce tanılama kaydı bırak.
+    logSubagent({
+      phase: 'error',
+      level: 'error',
+      taskId: subagentTaskId,
+      requestId: parentRequestId,
+      agentType,
+      msg: 'alt ajan beklenmeyen hata ile sonlandı',
+      data: {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        toolCalls: toolCallCount,
+        elapsedMs: Date.now() - startedAt
+      }
+    })
+    throw error
   } finally {
     await registry.dispose()
   }

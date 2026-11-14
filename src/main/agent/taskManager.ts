@@ -3,6 +3,7 @@ import { promises as fs } from 'fs'
 import { join } from 'path'
 import type { SubagentTaskInfo, SubagentTaskStatus, SubagentType } from '../../shared/types'
 import { createLogger } from '../logger'
+import { logSubagent } from './subagentLog'
 
 const log = createLogger('agent/taskManager')
 
@@ -15,7 +16,12 @@ interface TaskRecord {
 type ResumeHandler = (
   info: SubagentTaskInfo,
   controller: AbortController
-) => Promise<{ ok: boolean; content: string }>
+) => Promise<{
+  ok: boolean
+  content: string
+  partial?: boolean
+  partialReason?: 'steps' | 'tools' | 'deadline' | 'tool-timeout'
+}>
 
 const tasks = new Map<string, TaskRecord>()
 let persistChain: Promise<void> = Promise.resolve()
@@ -107,6 +113,8 @@ export function createSubagentTask(
     sessionId?: string
     agentType: SubagentType
     prompt: string
+    description?: string
+    ownedFiles?: string[]
     model?: string
     workspaceRoot?: string | null
   },
@@ -118,6 +126,8 @@ export function createSubagentTask(
     sessionId: input.sessionId,
     agentType: input.agentType,
     prompt: input.prompt,
+    description: input.description,
+    ownedFiles: input.ownedFiles,
     model: input.model,
     workspaceRoot: input.workspaceRoot,
     status: 'running',
@@ -126,6 +136,14 @@ export function createSubagentTask(
     lastAttemptAt: Date.now()
   }
   tasks.set(info.id, { info, cancel, waiters: [] })
+  logSubagent({
+    phase: 'state',
+    taskId: info.id,
+    requestId: info.requestId,
+    agentType: info.agentType,
+    msg: 'görev oluşturuldu (running)',
+    data: { description: info.description, model: info.model, promptLength: info.prompt.length }
+  })
   void persistTasks()
   return { ...info }
 }
@@ -135,7 +153,15 @@ export function updateSubagentTask(
   patch: Partial<
     Pick<
       SubagentTaskInfo,
-      'status' | 'finishedAt' | 'result' | 'error' | 'partial' | 'partialReason'
+      | 'status'
+      | 'finishedAt'
+      | 'result'
+      | 'error'
+      | 'partial'
+      | 'partialReason'
+      | 'progress'
+      | 'attempts'
+      | 'lastAttemptAt'
     >
   >
 ): SubagentTaskInfo | null {
@@ -145,7 +171,35 @@ export function updateSubagentTask(
   if (patch.status && patch.status !== 'running' && !record.info.finishedAt) {
     record.info.finishedAt = Date.now()
   }
-  notify(record)
+  // Durum geçişleri ayrıntılı günlüğe yazılır: "görev neden bitti / neden
+  // hata verdi" sorusu `subagent-tasks.json`'dan değil, olay akışından
+  // yanıtlanabilmeli.
+  if (patch.status) {
+    const elapsed = record.info.finishedAt
+      ? record.info.finishedAt - record.info.createdAt
+      : Date.now() - record.info.createdAt
+    logSubagent({
+      phase: 'state',
+      level: patch.status === 'error' ? 'error' : patch.status === 'running' ? 'info' : 'info',
+      taskId: id,
+      requestId: record.info.requestId,
+      agentType: record.info.agentType,
+      msg: `durum → ${patch.status}`,
+      data: {
+        elapsedMs: elapsed,
+        partial: record.info.partial ?? false,
+        partialReason: record.info.partialReason,
+        error: record.info.error?.slice(0, 500),
+        resultLength: record.info.result?.length ?? 0
+      }
+    })
+  }
+  // Bekleyenleri YALNIZCA anlamlı bir değişimde uyandır. İlerleme
+  // (`progress`) güncellemesi `task_wait`'i erken döndürürse model "hâlâ
+  // çalışıyor" cevabını sonuç sanır; testte tam bu yakalandı.
+  const wakesWaiters =
+    Boolean(patch.status) || patch.result !== undefined || patch.error !== undefined
+  if (wakesWaiters) notify(record)
   if (record.info.status !== 'running') prune()
   void persistTasks()
   return { ...record.info }
@@ -210,9 +264,20 @@ export function retrySubagentTask(id: string): SubagentTaskInfo | null {
     status: 'running' as SubagentTaskStatus,
     error: undefined,
     result: undefined,
+    partial: undefined,
+    partialReason: undefined,
+    progress: undefined,
     finishedAt: undefined,
     attempts: (record.info.attempts ?? 1) + 1,
     lastAttemptAt: Date.now()
+  })
+  logSubagent({
+    phase: 'resume',
+    taskId: id,
+    requestId: record.info.requestId,
+    agentType: record.info.agentType,
+    msg: 'görev yeniden başlatıldı',
+    data: { attempts: record.info.attempts }
   })
   notify(record)
   broadcastTask({ ...record.info })
@@ -226,7 +291,9 @@ export function retrySubagentTask(id: string): SubagentTaskInfo | null {
         updateSubagentTask(id, {
           status: result.ok ? 'done' : 'error',
           result: result.ok ? result.content : undefined,
-          error: result.ok ? undefined : result.content
+          error: result.ok ? undefined : result.content,
+          partial: result.partial,
+          partialReason: result.partialReason
         })
       }
     })

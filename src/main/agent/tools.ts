@@ -240,11 +240,14 @@ export function createTools(options: {
       agentType: 'explore' | 'review' | 'general',
       prompt: string,
       background: boolean,
-      files?: string[]
+      files?: string[],
+      description?: string
     ) => Promise<ToolExecutionResult>
     status: (taskId: string) => Promise<ToolExecutionResult>
     wait: (taskId: string, timeoutMs: number) => Promise<ToolExecutionResult>
+    continue: (taskId: string, prompt: string, files?: string[]) => Promise<ToolExecutionResult>
     cancel: (taskId: string) => Promise<ToolExecutionResult>
+    logs: (taskId: string | undefined, limit: number | undefined) => Promise<ToolExecutionResult>
     list: () => Promise<ToolExecutionResult>
   }
 }): ToolRegistry {
@@ -725,13 +728,18 @@ export function createTools(options: {
               'Bu ajanın YAZABİLECEĞİ dosya/dizin/glob listesi. Yazma yapan ajanlar ' +
               '(general) için zorunlu sayılır: iki ajana aynı dosya verilemez. ' +
               'Örnek: ["src/auth/", "src/lib/token.ts"]. Okuma kısıtı yoktur.'
+          },
+          description: {
+            type: 'string',
+            description:
+              'Görevin kısa etiketi (3-8 kelime). Arayüzde ve günlükte görev adı olarak görünür.'
           }
         },
         required: ['agent', 'prompt']
       },
       summary: (args) =>
         `Alt ajan · ${str(args.agent, 'explore')}${args.background === true ? ' (arka plan)' : ''}: ${str(
-          args.prompt
+          args.description || args.prompt
         ).slice(0, 80)}`,
       execute: async (args) => {
         const agent = str(args.agent, 'explore')
@@ -741,7 +749,8 @@ export function createTools(options: {
         const files = Array.isArray(args.files)
           ? args.files.map((value) => String(value)).filter(Boolean)
           : undefined
-        return tasks.spawn(type, prompt, args.background === true, files)
+        const description = str(args.description).trim() || undefined
+        return tasks.spawn(type, prompt, args.background === true, files, description)
       }
     })
 
@@ -764,19 +773,78 @@ export function createTools(options: {
       name: 'task_wait',
       category: 'read',
       description:
-        'Arka plan görevinin bitmesini bekler ve sonucu döndürür. timeout_ms kadar bekler; ' +
-        'süre dolarsa görev hâlâ çalışıyor olabilir.',
+        'Arka plan görevinin bitmesini bekler ve sonucu döndürür. Süre dolarsa **hata değil**, ' +
+        '"hâlâ çalışıyor" bilgisi döner: başka işe devam edebilirsin, görev bitince bildirim gelir. ' +
+        'Varsayılan bekleme kısa tutulur (30 sn); uzun işlerde beklemek yerine paralel çalış.',
       parameters: {
         type: 'object',
         properties: {
           task_id: { type: 'string', description: 'Görev kimliği.' },
-          timeout_ms: { type: 'number', description: 'Bekleme süresi (varsayılan 90000).' }
+          timeout_ms: { type: 'number', description: 'Bekleme süresi (varsayılan 30000).' }
         },
         required: ['task_id']
       },
       summary: (args) => `Görev bekle: ${str(args.task_id)}`,
       execute: async (args) =>
-        tasks.wait(str(args.task_id), Math.max(1000, Math.round(num(args.timeout_ms, 90_000))))
+        tasks.wait(str(args.task_id), Math.max(1000, Math.round(num(args.timeout_ms, 30_000))))
+    })
+
+    tools.push({
+      name: 'task_continue',
+      category: 'read',
+      description:
+        'Biten (veya kısmi kalan) bir alt ajanı **aynı görev üzerinde** devam ettirir. ' +
+        'Önceki görev ve sonuç bağlam olarak verilir; ajan sıfırdan başlamaz. ' +
+        'Kısmi sonuçta eksik kalan işi tamamlatmak için kullan.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task_id: { type: 'string', description: 'Devam ettirilecek görev kimliği.' },
+          prompt: {
+            type: 'string',
+            description: 'Yeni istem: neyin eksik kaldığı ve ne yapılması gerektiği.'
+          },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'General ajan için yazma izni (verilmezse önceki liste kullanılır).'
+          }
+        },
+        required: ['task_id', 'prompt']
+      },
+      summary: (args) => `Görevi sürdür: ${str(args.task_id)}`,
+      execute: async (args) => {
+        const files = Array.isArray(args.files)
+          ? args.files.map((value) => String(value)).filter(Boolean)
+          : undefined
+        return tasks.continue(str(args.task_id), str(args.prompt), files)
+      }
+    })
+
+    tools.push({
+      name: 'task_logs',
+      category: 'read',
+      description:
+        'Alt ajanların ayrıntılı izleme günlüğünü döndürür: adımlar, araç süreleri, ' +
+        'bütçe kesintileri, izin/araç hataları ve durum geçişleri. ' +
+        'Bir görev takıldığında veya beklenmedik sonuç verdiğinde nedeni buradan görülür.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task_id: {
+            type: 'string',
+            description: 'Görev kimliği. Verilmezse bu isteğin tüm alt ajan olayları.'
+          },
+          limit: { type: 'number', description: 'Son kaç olay (varsayılan 60, en fazla 500).' }
+        },
+        required: []
+      },
+      summary: (args) => `Alt ajan günlüğü${args.task_id ? `: ${str(args.task_id)}` : ''}`,
+      execute: async (args) =>
+        tasks.logs(
+          args.task_id ? str(args.task_id) : undefined,
+          Math.max(1, Math.min(500, Math.round(num(args.limit, 60))))
+        )
     })
 
     tools.push({

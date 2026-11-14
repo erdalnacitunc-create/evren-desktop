@@ -1523,7 +1523,12 @@ export function createTools(options: {
       'Code Mode: araçları JavaScript ile toplu çağırır. Sandbox içinde ' +
       '`tools.read_file`, `tools.write_file`, `tools.edit_file`, `tools.patch`, ' +
       '`tools.run_command`, `tools.git`, `tools.webfetch` gibi çağrılar yapılabilir. ' +
-      'Dış onay kategorisi execute’tur; onaylanan script içindeki araçlar çalışır.',
+      'Dış onay kategorisi execute’tur; onaylanan script içindeki araçlar çalışır.\n' +
+      'ÖNEMLİ: her `tools.*` çağrısı `{ ok: boolean, content: string }` döndürür — ' +
+      '`content`, `stdout` veya `body` DEĞİL. Dosya/komut metni için `(await ' +
+      'tools.run_command({command:"..."})).content` yazın.\n' +
+      'Script bir değer döndürmek zorundadır: sonucu `return` ile verin ' +
+      '(`return results`), aksi hâlde araç "boş sonuç" hatası döndürür.',
     parameters: {
       type: 'object',
       properties: {
@@ -1613,11 +1618,46 @@ export function createTools(options: {
             setTimeout(() => reject(new Error('Code Mode zaman aşımı (30s).')), 30_000)
           )
         ])
-        const content =
-          typeof result === 'string' ? result : JSON.stringify(result, null, 2)
-        const output = [logs.join('\n'), String(content ?? 'undefined')]
-          .filter(Boolean)
-          .join('\n')
+        const logsText = logs.join('\n')
+
+        /**
+         * Boş sonuç **başarı değildir**.
+         *
+         * Canlı kusur (0.4.15, gemma-4-31b): script `tools.run_command(...)`
+         * sonucundan `content.stdout` okudu; gerçek alan `content` olduğu için
+         * tüm değerler `undefined` kaldı ve `JSON.stringify` `{}` üretti.
+         * Araç `ok: true` dedi; model 11 dosyayı okuduğunu sandı, oysa hiçbirini
+         * okumamıştı ve raporu dosya ADLARINDAN yazdı. Aynı hata sınıfı:
+         * sessiz başarısızlığın başarı gibi raporlanması.
+         */
+        const serialized =
+          typeof result === 'string' ? result : JSON.stringify(result, null, 2) ?? 'null'
+        const empty =
+          result === undefined ||
+          result === null ||
+          (typeof result === 'string' && result.trim() === '') ||
+          // Anahtarları olup tüm değerleri `undefined` olan nesne `{}` olarak
+          // serileşir — bu da boş sayılmalı (canlı kusurun tam biçimi).
+          serialized.trim() === '{}' ||
+          serialized.trim() === '[]'
+
+        if (empty) {
+          const hint =
+            result === undefined
+              ? 'Script bir değer döndürmedi. Sonucu `return` ile verin ' +
+                '(ör. `return results`).'
+              : 'Script boş sonuç döndürdü (`{}`, `[]`, `null` veya boş metin). ' +
+                'Bu genellikle yanlış alan adından kaynaklanır: `tools.*` çağrıları ' +
+                '`{ ok, content }` döndürür — `.stdout`, `.body`, `.text` YOKTUR. ' +
+                '`(await tools.run_command({command:"..."})).content` kullanın.'
+          return {
+            ok: false,
+            content: `Code Mode: boş sonuç.\n${hint}${logsText ? `\n\nGünlükler:\n${logsText}` : ''}`
+          }
+        }
+
+        const content = typeof result === 'string' ? result : serialized
+        const output = [logsText, content].filter(Boolean).join('\n')
         return { ok: true, content: output.slice(0, 60_000) }
       } catch (error) {
         return {

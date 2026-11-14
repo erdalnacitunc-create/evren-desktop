@@ -188,6 +188,40 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.16 Beta — Code Mode sessiz başarısızlığı
+
+İki paralel canlı sorguda (aynı istem, farklı model) bulundu: `gemma-4-31b`
+oturumunda 14 `execute` çağrısının **13'ü** `{}`/`undefined` döndürdü — ve hepsi
+**`ok: true`** raporlandı. Model 11 dosyayı okuduğunu sandı, hiçbirini okumadı;
+raporu dosya adlarından yazdı ve *"dosya erişim kısıtları yaşandı"* diye yanlış
+gerekçe verdi (`/status`, `/command` gibi uydurma uç noktalarla).
+
+Kök neden: `tools.*` çağrıları `{ ok, content }` döndürürken model `.stdout`
+okudu; tüm değerler `undefined` kaldı, `JSON.stringify` `{}` üretti.
+
+**Düzeltme:** boş sonuç artık **hata** (`undefined`, `null`, boş metin, `{}`,
+`[]`). Hata mesajı yolu gösterir: `return` gerektiği ve doğru alanın `content`
+olduğu. Araç açıklaması da sözleşmeyi baştan yazar.
+
+Aynı hata sınıfı 0.4.14'te `task_wait` ile yaşanmıştı: sessiz başarısızlık
+başarı gibi raporlanınca model yanlış yola sapıyor.
+
+## Aynı istem, iki model
+
+| | gemma-4-31b | deepseek-v4.1-flash |
+|---|---|---|
+| Süre | 720 sn | 1092 sn |
+| Araç | 25 | 26 |
+| Boş `execute` | **13** | **0** |
+| Alt ajan | 3 | 4 |
+| Yanıt | 600 kelime | 1124 kelime |
+
+## Doğrulama
+
+`code-mode-empty-test` (17 kontrol). Toplam: **68 paket / 1622 kontrol**
+(önceki 67/1605). typecheck ✓ build ✓ e2e ✓
+Ayrıntı: `docs/RELEASE-0.4.16.md`.
+
 # 0.4.15 Beta — web araması onarımı, alt ajan bütçesi, yinelenen rapor
 
 0.4.14 canlı koşusunda üç kusur bulundu:

@@ -188,6 +188,23 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.19 Beta — alt ajan rapor bütçesi (süre ve kısmi sonuç)
+
+0.4.18 üç fazlı koşusu: alt ajan adımı başına **88 sn**, araç payı **<%2**,
+en uzun tek adım **503 sn**, faz 2'de **3/3 kısmi**. Süre araçlarda değil,
+modelin tek parçada 4-8 bin karakterlik rapor üretmesinde.
+
+**Düzeltme:** rapor **450 kelime** ile sınırlandı — hem istemde (madde işareti,
+kod bloğu yok, giriş/sonuç paragrafı yok) hem kodda (`applyReportBudget`,
+cümle sonunda keser). Sentez ve %75 bütçe uyarısı aynı sınırı taşıyor. Ayrıca
+"3-5 adım içinde yazmaya başla, tek büyük raporu sona bırakma" kuralı eklendi.
+
+## Doğrulama
+
+`report-budget-test` 24 kontrol. Toplam: **69 paket / 1681 kontrol**.
+Canlı ölçüm: `subagent-report-live-test` (3 paralel explore ajanı).
+Ayrıntı: `docs/RELEASE-0.4.19.md`.
+
 # 0.4.18 Beta — koordinasyon da ilerlemedir; alt ajan bütçesi ve kuyruk
 
 Üç fazlı canlı sınamada (proje incelemesi / web araştırması / kodlama) iki yeni

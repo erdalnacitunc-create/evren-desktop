@@ -113,6 +113,89 @@ function deadlineMs(): number {
   return Number.isFinite(override) && override >= 5_000 ? override : 600_000
 }
 
+/**
+ * Alt ajan raporunun **kelime bütçesi**.
+ *
+ * ## Neden (0.4.19)
+ *
+ * 0.4.18 üç fazlı canlı koşusunun ölçümü:
+ *
+ * | | |
+ * |---|---|
+ * | Alt ajan adımı başına ortalama | **88 sn** |
+ * | Araç süresi payı | **<%2** (araçlar 0,2–2,7 sn) |
+ * | En uzun tek adım | **503 sn** |
+ * | Faz 2'de kısmi sonuç | 3/3 |
+ *
+ * Yani süre araçlarda değil, modelin **tek parçada 4-8 bin karakterlik rapor**
+ * üretmesinde. 600 sn'lik bütçenin tamamı tek bir üretim turunda tükenebiliyor;
+ * bütçeyi artırmak süreyi uzatıyor ama kısmi sonucu çözmüyor.
+ *
+ * Model "detaylı rapor" istendiğini varsayıp uzun paragraflar yazıyor. Kısa ve
+ * madde işaretli bir rapor aynı bilgiyi taşır, üretim süresini 2-3 katına
+ * düşürür ve kesilme riskini azaltır. 450 kelime (~3000 karakter) bu proje
+ * için bol: canlı raporlar zaten 400-900 kelime aralığındaydı.
+ */
+const MAX_REPORT_WORDS = 450
+
+/** Raporda kesin sınır — isteme gömülür. */
+const REPORT_BUDGET_NOTE =
+  `\n\nRAPOR BÜTÇESİ: Sonucun **en fazla ${MAX_REPORT_WORDS} kelime** olsun. ` +
+  'Uzun paragraf yazma; başlık + madde işareti kullan. Kod bloğu dökme, ' +
+  'yalnızca `dosya:satır` referansı ver. Her satır yeni bilgi taşımalı; ' +
+  'giriş/sonuç/özet paragrafları yazma. Sınırı aşarsan yanıt kesilir ve ' +
+  'ana ajan eksik bilgi alır.'
+
+/**
+ * Metnin yaklaşık kelime sayısı.
+ *
+ * Türkçe eklemeli bir dil olduğu için basit boşluk sayımı yeterli: rapor
+ * uzunluğunu ölçmek için kesin dilbilimsel analiz gerekmiyor.
+ */
+export function countWords(text: string): number {
+  const trimmed = String(text ?? '').trim()
+  if (!trimmed) return 0
+  return trimmed.split(/\s+/).length
+}
+
+/**
+ * Rapor bütçesini uygular.
+ *
+ * Kesme **kelime sınırında** yapılır: cümle ortasında karakter kesmek yarım
+ * kelime bırakır ve modelin bir sonraki turunda kafa karıştırır. Sınır
+ * aşılırsa son tam cümle bulunur ve kısa bir not eklenir.
+ *
+ * Neden kod tarafında da zorlanıyor: istem "450 kelime" dese de model
+ * aşabilir. Kod tarafı garanti verir; istem yalnızca kaliteyi artırır.
+ */
+export function applyReportBudget(
+  text: string,
+  maxWords = MAX_REPORT_WORDS
+): { text: string; truncated: boolean; words: number } {
+  const words = countWords(text)
+  if (words <= maxWords) return { text, truncated: false, words }
+
+  // Kelime sınırına kadar al.
+  const tokens = text.trim().split(/\s+/)
+  const head = tokens.slice(0, maxWords).join(' ')
+
+  // Son cümle sonunu bul; en az yarısı korunacaksa orada kes.
+  const lastStop = Math.max(
+    head.lastIndexOf('. '),
+    head.lastIndexOf('.\n'),
+    head.lastIndexOf('; '),
+    head.lastIndexOf('\n- ')
+  )
+  const base = lastStop > head.length * 0.5 ? head.slice(0, lastStop + 1) : head
+
+  return {
+    text: `${base}\n\n_[Rapor ${maxWords} kelime bütçesine kısaltıldı; ayrıntı için ana ajan ` +
+      'gerekirse aracı kendisi çağırabilir.]_',
+    truncated: true,
+    words
+  }
+}
+
 /** Bütçenin bu oranı dolunca modele "toparla" hatırlatması gider. */
 const DEADLINE_NUDGE_RATIO = 0.75
 
@@ -126,9 +209,9 @@ const DEADLINE_NUDGE_RATIO = 0.75
 const SUBAGENT_DEADLINE_NUDGE =
   'BÜTÇE UYARISI: Sürenin yaklaşık dörtte üçü doldu. **Şimdi araç çağırmayı bırak** ve ' +
   'elindeki doğrulanmış bulguları yaz. Raporu kısa maddeler hâlinde ver ' +
-  '(başlık + madde işaretleri), uzun paragraflardan kaçın. ' +
+  '(başlık + madde işaretleri), uzun paragraflardan kaçın, kod bloğu dökme. ' +
   'Eksik kalan noktaları "doğrulanmadı" diye işaretle. ' +
-  'Bütçe dolduğunda üretim kesilir ve raporun yarım kalır.'
+  `En fazla ${MAX_REPORT_WORDS} kelime. Bütçe dolduğunda üretim kesilir ve raporun yarım kalır.`
 
 /**
  * Limite takılan alt ajanı **metin yazmaya** zorlar.
@@ -158,6 +241,8 @@ const SUBAGENT_DEADLINE_NUDGE =
  * tüketti. Alt ajan araçlarına sinyal geçirilmiyordu, yani durdurulamıyordu.
  */
 const TOOL_TIMEOUT_MS = 90_000
+
+
 
 async function runToolWithTimeout<T>(
   run: (signal: AbortSignal) => Promise<T>,
@@ -225,7 +310,8 @@ async function finalizeSubagent(input: {
   const note =
     limitNote +
     ' Yeni araç çağırma. Şimdiye kadar topladığın bulguları, dosya:satır referanslarıyla ' +
-    'birlikte düzenli bir rapor olarak YAZ. Eksik kalan noktaları "doğrulanamadı" diye işaretle.'
+    'birlikte düzenli bir rapor olarak YAZ. Eksik kalan noktaları "doğrulanamadı" diye işaretle.' +
+    REPORT_BUDGET_NOTE
 
   const body = {
     ...buildBaseBody(input.request),
@@ -311,8 +397,10 @@ function agentInstruction(
     '\n- Aynı adımda birden çok dosyayı oku: tek yanıtta birden fazla `read_file` çağrısı yap (paralel araç çağrısı). ' +
     'Dosyaları tek tek okumak adım bütçesini tüketir.' +
     '\n- Önce daralt: `grep`/`glob` ile ilgili dosyaları bul, sonra yalnızca gerekenleri oku.' +
-    '\n- 5 adım içinde metin yazmaya başla; bulguları arada özetle.' +
-    '\n- Rapor yazarken araç çağırma; elindekiyle bitir, eksikleri "doğrulanamadı" diye işaretle.'
+    '\n- 3-5 adım içinde bulgu yazmaya başla; her adımda kısa not düş. Tek büyük raporu ' +
+    'sona bırakma — üretim uzarsa bütçe dolar ve rapor kesilir.' +
+    '\n- Rapor yazarken araç çağırma; elindekiyle bitir, eksikleri "doğrulanamadı" diye işaretle.' +
+    REPORT_BUDGET_NOTE
   return `${base}${workspace}${ownershipNote}${scope}${outsideNote}${efficiency}\n\nGörev:\n${prompt}\n\nYalnızca ana ajana dönük kısa bir sonuç üret; kullanıcıya doğrudan hitap etme. Gereksiz araç çıktısını tekrar etme.`
 }
 
@@ -486,7 +574,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         })
         return {
           ok: true,
-          content: (synthesized + changedDeadline).slice(0, 12_000),
+          content: applyReportBudget((synthesized + changedDeadline)).text,
           partial: true,
           partialReason: 'deadline'
         }
@@ -558,7 +646,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         })
         return {
           ok: true,
-          content: (base + note + changedTimeout).slice(0, 12_000),
+          content: applyReportBudget((base + note + changedTimeout)).text,
           partial: true,
           partialReason: 'deadline'
         }
@@ -597,7 +685,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         })
         return {
           ok: true,
-          content: ((finalContent || 'Alt ajan bir sonuç üretmedi.') + changed).slice(0, 12_000)
+          content: applyReportBudget(((finalContent || 'Alt ajan bir sonuç üretmedi.') + changed)).text
         }
       }
 
@@ -649,7 +737,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           })
           return {
             ok: true,
-            content: (synthesized + changedTools).slice(0, 12_000),
+            content: applyReportBudget((synthesized + changedTools)).text,
             partial: true,
             partialReason: 'tools'
           }
@@ -902,7 +990,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
     })
     return {
       ok: true,
-      content: (synthesized + changedSteps).slice(0, 12_000),
+      content: applyReportBudget((synthesized + changedSteps)).text,
       partial: true,
       partialReason: 'steps'
     }

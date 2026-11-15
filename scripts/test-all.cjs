@@ -71,6 +71,7 @@ const SUITES = [
   { file: 'scripts/subagent-wait-test.ts', label: 'Alt ajan bekleme/devam semantiği' },
   { file: 'scripts/subagent-deadline-test.ts', label: 'Alt ajan akış bütçesi' },
   { file: 'scripts/code-mode-empty-test.ts', label: 'Code Mode boş sonuç denetimi' },
+  { file: 'scripts/report-budget-test.ts', label: 'Alt ajan rapor bütçesi', fast: true },
   { file: 'scripts/websearch-parse-test.ts', label: 'Web arama ayrıştırma', fast: true },
   { file: 'scripts/outside-workspace-hint-test.ts', label: 'Çalışma alanı dışı ipucu', fast: true },
   { file: 'scripts/web-research-hint-test.ts', label: 'Web araştırma ipucu', fast: true },

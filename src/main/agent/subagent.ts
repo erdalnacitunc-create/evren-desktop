@@ -22,6 +22,7 @@ import {
   progressNudgeMessage,
   shouldNudgeProgress,
   isProductiveRead,
+  isCoordinationProgress,
   type StepObservation
 } from './progressGuard'
 import { logSubagent } from './subagentLog'
@@ -90,22 +91,26 @@ const MAX_TOOL_CALLS = 30
 /**
  * Yumuşak son tarih.
  *
- * ## Neden 420 sn (0.4.15)
+ * ## Neden 600 sn (0.4.18)
  *
- * 0.4.14 canlı koşusunda iki explore ajanı 482 ve 575 sn sürdü — bütçe
- * 210 sn'ydi ama **fiilen uygulanmıyordu**: kontrol yalnızca adım başında
- * yapılıyor, tek bir uzun model üretimini kesemiyordu. Zaman araçlarda
- * değildi (toplam 10-15 sn); model üretimindeydi (291 ve 423 sn tek parça).
+ * 0.4.14'te iki explore ajanı 482 ve 575 sn sürdü ama bütçe **fiilen
+ * uygulanmıyordu**: kontrol yalnızca adım başında yapılıyor, tek bir uzun
+ * model üretimini kesemiyordu. 0.4.15'te bütçe akışa uygulandı (doğru),
+ * ama 420 sn seçildi ve canlı koşuda (0.4.18 faz 1) **üç ajanın üçü de**
+ * uzun rapor üretirken kesildi (`akış bütçesi doldu (387 sn)`).
  *
- * Artık bütçe **akışa** uygulanır: her LLM çağrısına kalan süre
- * `totalTimeoutMs` olarak geçirilir. Süre dolunca üretim kesilir ve ajan
- * elindeki metni **kısmi sonuç** olarak döndürür (`task_continue` ile
- * sürdürülebilir). 420 sn, gözlenen uzun koşuları kapsar ama sonsuz
- * kaçışı engeller; `EVREN_SUBAGENT_DEADLINE_MS` ile değiştirilebilir.
+ * Ölçüm: bu sağlayıcıda 4-8 bin karakterlik rapor tek parçada 200-400 sn
+ * üretim demek; üstüne okuma turları eklenince 420 sn dar kalıyor. 600 sn
+ * derin incelemeyi kesmeden sonsuz kaçışı hâlâ engeller.
+ *
+ * Bütçe **akışa** uygulanır: her LLM çağrısına kalan süre
+ * `totalTimeoutMs` olarak geçirilir. Dolunca üretim kesilir ve ajan elindeki
+ * metni **kısmi sonuç** olarak döndürür (`task_continue` ile sürdürülebilir).
+ * `EVREN_SUBAGENT_DEADLINE_MS` ile değiştirilebilir.
  */
 function deadlineMs(): number {
   const override = Number(process.env['EVREN_SUBAGENT_DEADLINE_MS'])
-  return Number.isFinite(override) && override >= 5_000 ? override : 420_000
+  return Number.isFinite(override) && override >= 5_000 ? override : 600_000
 }
 
 /** Bütçenin bu oranı dolunca modele "toparla" hatırlatması gider. */
@@ -119,9 +124,11 @@ const DEADLINE_NUDGE_RATIO = 0.75
  * sağlar (Claude Code `maxTurns` davranışı).
  */
 const SUBAGENT_DEADLINE_NUDGE =
-  'BÜTÇE UYARISI: Sürenin yaklaşık dörtte üçü doldu. Yeni geniş tarama başlatma. ' +
-  'Elindeki doğrulanmış bulguları şimdi, düzenli biçimde yaz. ' +
-  'Eksik kalan noktaları "doğrulanmadı" diye işaretle. Rapor bütçe dolduğunda kesilebilir.'
+  'BÜTÇE UYARISI: Sürenin yaklaşık dörtte üçü doldu. **Şimdi araç çağırmayı bırak** ve ' +
+  'elindeki doğrulanmış bulguları yaz. Raporu kısa maddeler hâlinde ver ' +
+  '(başlık + madde işaretleri), uzun paragraflardan kaçın. ' +
+  'Eksik kalan noktaları "doğrulanmadı" diye işaretle. ' +
+  'Bütçe dolduğunda üretim kesilir ve raporun yarım kalır.'
 
 /**
  * Limite takılan alt ajanı **metin yazmaya** zorlar.
@@ -606,6 +613,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
 
       /** Bu adımda içerik üreten okuma sayısı (ilerleme ölçümü). */
       let productiveReadsThisStep = 0
+      let coordinationThisStep = 0
       for (const call of result.toolCalls) {
         if (controller.signal.aborted) {
           return { ok: false, content: 'Alt ajan durduruldu.' }
@@ -809,6 +817,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           if (isProductiveRead(call.name, execution.ok, execution.content.length)) {
             productiveReadsThisStep += 1
           }
+          if (isCoordinationProgress(call.name, execution.ok, execution.content.length)) {
+            coordinationThisStep += 1
+          }
         } catch (error) {
           const content = `Alt ajan araç hatası: ${
             error instanceof Error ? error.message : String(error)
@@ -850,7 +861,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       stepHistory.push({
         contentLength: (result.content ?? '').trim().length,
         tools: result.toolCalls.map((call) => call.name),
-        productiveReads: productiveReadsThisStep
+        productiveReads: productiveReadsThisStep,
+        coordinationSignals: coordinationThisStep
       })
       if (shouldNudgeProgress(stepHistory, nudgesSent)) {
         nudgesSent += 1

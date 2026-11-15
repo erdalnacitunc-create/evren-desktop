@@ -51,6 +51,7 @@ import {
   shouldNudgeProgress,
   stalledStreak,
   isProductiveRead,
+  isCoordinationProgress,
   type StepObservation
 } from './progressGuard'
 import { runSubagent } from './subagent'
@@ -1282,6 +1283,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
 
       /** Bu adımda içerik üreten okuma sayısı (ilerleme ölçümü). */
       let productiveReadsThisStep = 0
+      /** Bu adımda yapılan koordinasyon işi (alt ajan başlatma/bekleme). */
+      let coordinationThisStep = 0
       for (const call of result.toolCalls) {
         if (controller.signal.aborted) {
           send({ requestId, type: 'done', finishReason: 'aborted' })
@@ -1393,6 +1396,9 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           if (isProductiveRead(call.name, execution.ok, execution.content.length)) {
             productiveReadsThisStep += 1
           }
+          if (isCoordinationProgress(call.name, execution.ok, execution.content.length)) {
+            coordinationThisStep += 1
+          }
 
           // Keşif gözlemi: "listeledin ama okumadın" durumunu izler.
           exploration = updateExploration(exploration, {
@@ -1433,15 +1439,17 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       stepHistory.push({
         contentLength: (result.content ?? '').trim().length,
         tools: result.toolCalls.map((call) => call.name),
-        productiveReads: productiveReadsThisStep
+        productiveReads: productiveReadsThisStep,
+        coordinationSignals: coordinationThisStep
       })
       if (shouldNudgeProgress(stepHistory, nudgesSent)) {
         const nudge = progressNudgeMessage(nudgesSent)
         nudgesSent += 1
         messages.push({ role: 'user', content: nudge })
+        const streak = stalledStreak(stepHistory)
         log.warn(
-          `İlerlemesiz döngü: ${stalledStreak(stepHistory)} adım metinsiz — ` +
-            `yönlendirme #${nudgesSent} gönderildi`
+          `İlerlemesiz döngü: ${streak > 0 ? `${streak} adım` : 'uzun süre'} metinsiz ` +
+            `(toplam ${stepHistory.length} adım, araç ${toolCallCount}) — yönlendirme #${nudgesSent}`
         )
       }
       // Keşif ipucu: çok dosya listelenip içerik okunmadıysa modele

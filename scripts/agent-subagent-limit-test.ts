@@ -195,7 +195,9 @@ async function main(): Promise<void> {
     check('mesaj bütçe tüketimini gösteriyor', text.includes('kullanılan: 1/1'), true)
 
     const timeoutText = limitMessage({ reason: 'timeout' } as GateAcquireError)
-    check('zaman aşımı mesajı', timeoutText.includes('zaman aşımına'), true)
+    check('zaman aşımı mesajı', timeoutText.includes('sırası açılmadı'), true)
+    check('zaman aşımı task_wait öneriyor', timeoutText.includes('task_wait'), true)
+    check('zaman aşımı "açma" demiyor', timeoutText.includes('yeni alt ajan açma'), false)
   }
 
   // ============ 13) Gerçekçi senaryo: 6 paralel + 2 fazla ============
@@ -242,7 +244,7 @@ async function main(): Promise<void> {
     check('bütçe 2', gate.snapshot().used['r'], 2)
   }
 
-  console.log(`TOTAL=46 FAILED=${failed}`)
+  console.log(`TOTAL=48 FAILED=${failed}`)
   process.exit(failed === 0 ? 0 : 1)
 }
 

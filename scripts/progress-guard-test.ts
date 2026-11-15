@@ -2,6 +2,7 @@
 import {
   PROGRESS_NUDGE,
   PROGRESS_NUDGE_FINAL,
+  isCoordinationProgress,
   isProductiveRead,
   progressNudgeMessage,
   shouldNudgeProgress,
@@ -149,17 +150,30 @@ const noTools: StepObservation = { contentLength: 0, tools: [] }
   check('stalledStreak okumada durur', stalledStreak([readStep(0), readStep(2), readStep(0)]), 1)
 }
 
-// ============ 12) Sert eşik: okumada ısrar eden model yine durdurulur ============
+// ============ 12) Sert eşik: ilerleme kesilince devreye girer ============
 {
   const readStep = (reads: number): StepObservation => ({
     contentLength: 0,
     tools: ['run_command'],
     productiveReads: reads
   })
-  const endless = Array.from({ length: 8 }, () => readStep(1))
-  check('8 metinsiz okuma adımı → sert eşik', shouldNudgeProgress(endless), true)
-  check('7 adımda sert eşik yok', shouldNudgeProgress(endless.slice(0, 7)), false)
-  check('sert eşik yapılandırılabilir', shouldNudgeProgress(endless.slice(0, 5), 0, { hardThreshold: 5 }), true)
+  // Taze ilerleme sürdüğü sürece yönlendirme yok (uzun keşif meşru).
+  const active = Array.from({ length: 12 }, () => readStep(1))
+  check('12 adım sürekli okuma → yönlendirme yok', shouldNudgeProgress(active), false)
+
+  // Son 6 adımda ilerleme bittiyse sert eşik devreye girer.
+  const dried = [...Array.from({ length: 6 }, () => readStep(1)), ...Array.from({ length: 6 }, () => readStep(0))]
+  check('ilerleme kurudu → sert eşik', shouldNudgeProgress(dried), true)
+
+  check(
+    'sert eşik yapılandırılabilir',
+    shouldNudgeProgress(
+      [...Array.from({ length: 2 }, () => readStep(1)), ...Array.from({ length: 3 }, () => readStep(0))],
+      0,
+      { hardThreshold: 5, freshProgressWindow: 3 }
+    ),
+    true
+  )
 }
 
 // ============ 13) Okuma tanımı ============
@@ -173,5 +187,102 @@ const noTools: StepObservation = { contentLength: 0, tools: [] }
   check('todo_write okuma değil', isProductiveRead('todo_write', true, 500), false)
 }
 
-console.log(`TOTAL=44 FAILED=${failed}`)
+// ============ 14) Koordinasyon ilerlemedir (0.4.18) ============
+// Canlı kusur: faz 1'de ana ajanın dört adımı
+//   spawn_agent → spawn_agent → task_wait → task_wait
+// idi. Okuma yoktu, metin yoktu — ama gerçek iş yönetimi vardı (arka planda
+// ajan çalışıyor, ana ajan bekliyor). Yönlendirme yine "araç çağırmayı bırak"
+// dedi; yanlış zamanlama.
+{
+  const coord = (signals: number): StepObservation => ({
+    contentLength: 0,
+    tools: ['task_wait'],
+    productiveReads: 0,
+    coordinationSignals: signals
+  })
+
+  check(
+    'koordinasyonlu adımlar yönlendirme tetiklemez',
+    shouldNudgeProgress([coord(1), coord(1), coord(1), coord(1)]),
+    false
+  )
+  check(
+    'koordinasyonsuz adımlar tetikler',
+    shouldNudgeProgress([coord(0), coord(0), coord(0), coord(0)]),
+    true
+  )
+  check(
+    'okuma + koordinasyon karışık',
+    shouldNudgeProgress([
+      { contentLength: 0, tools: ['spawn_agent'], productiveReads: 0, coordinationSignals: 1 },
+      { contentLength: 0, tools: ['read_file'], productiveReads: 2, coordinationSignals: 0 },
+      { contentLength: 0, tools: ['task_wait'], productiveReads: 0, coordinationSignals: 1 },
+      { contentLength: 0, tools: ['grep'], productiveReads: 1, coordinationSignals: 0 }
+    ]),
+    false
+  )
+  check('stalledStreak koordinasyonda durur', stalledStreak([coord(0), coord(1), coord(0)]), 1)
+
+  // Güvenlik ağı: 12 metinsiz koordinasyon adımı hâlâ yönlendirmez; taze
+  // ilerleme sürüyorsa uzun keşif meşrudur (bkz. §16).
+}
+
+// ============ 15) Koordinasyon aracı tanımı ============
+{
+  check('spawn_agent başarılı = koordinasyon', isCoordinationProgress('spawn_agent', true, 200), true)
+  check('task_wait "hâlâ çalışıyor" = koordinasyon', isCoordinationProgress('task_wait', true, 272), true)
+  check('task_status = koordinasyon', isCoordinationProgress('task_status', true, 120), true)
+  check('task_wait kısa hata = değil', isCoordinationProgress('task_wait', true, 20), false)
+  check('spawn başarısız = değil', isCoordinationProgress('spawn_agent', false, 500), false)
+  check('read_file koordinasyon değil', isCoordinationProgress('read_file', true, 500), false)
+}
+
+// ============ 16) Koordinasyonla süren sessiz adımlar yönlendirme üretmez ============
+// 0.4.18 canlı koşusu (faz 2): ana ajan 8 adım boyunca alt ajan başlatıp
+// bekledi; her adımda gerçek koordinasyon vardı. Sert eşik yalnızca ham adım
+// sayısına baktığı için "metinsiz" sayıp yönlendirme gönderdi.
+{
+  const coord = (signals: number): StepObservation => ({
+    contentLength: 0,
+    tools: ['spawn_agent'],
+    productiveReads: 0,
+    coordinationSignals: signals
+  })
+
+  const eightCoord = Array.from({ length: 8 }, () => coord(1))
+  check('8 koordinasyonlu adım yönlendirmez', shouldNudgeProgress(eightCoord), false)
+
+  const twelveCoord = Array.from({ length: 12 }, () => coord(1))
+  check('12 koordinasyonlu adım hâlâ yönlendirmez', shouldNudgeProgress(twelveCoord), false)
+
+  // İlerleme kesilirse (son 6 adımda okuma/koordinasyon yok) sert eşik devreye girer.
+  const stalled = [
+    ...Array.from({ length: 6 }, () => coord(1)),
+    ...Array.from({ length: 6 }, () => ({
+      contentLength: 0,
+      tools: ['run_command'],
+      productiveReads: 0,
+      coordinationSignals: 0
+    }))
+  ]
+  check('12 adım, son 6’sı ilerlemesiz → yönlendirir', shouldNudgeProgress(stalled), true)
+
+  // Sert eşik yapılandırılabilir (taze pencere ile).
+  const mixed = [
+    ...Array.from({ length: 5 }, () => coord(1)),
+    ...Array.from({ length: 5 }, () => ({
+      contentLength: 0,
+      tools: ['run_command'],
+      productiveReads: 0,
+      coordinationSignals: 0
+    }))
+  ]
+  check(
+    'taze pencere 10 → ilerleme eski sayılır',
+    shouldNudgeProgress(mixed, 0, { hardThreshold: 10, freshProgressWindow: 5 }),
+    true
+  )
+}
+
+console.log(`TOTAL=63 FAILED=${failed}`)
 process.exit(failed === 0 ? 0 : 1)

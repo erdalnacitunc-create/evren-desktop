@@ -102,7 +102,20 @@ export function createSubagentGate(options: SubagentGateOptions = {}): SubagentG
     1,
     Math.round(options.maxPerRequest ?? MAX_SUBAGENTS_PER_REQUEST)
   )
-  const queueTimeoutMs = Math.max(0, Math.round(options.queueTimeoutMs ?? 300_000))
+  /**
+   * Kuyrukta bekleme süresi.
+   *
+   * 0.4.17 canlı koşusunda (faz 2) 4. spawn 300 sn kuyrukta bekledi, sonra
+   * "sırası zaman aşımına uğradı" diye reddedildi; model tekrar denedi ve
+   * ikinci sefer geçti. Yani 300 sn'lik sessiz bekleme yalnızca 5 dakika
+   * kaybettirdi. Alt ajan turları dakikalarca sürdüğü için kuyrukta beklemek
+   * nadiren işe yarar: modele **hemen** "mevcut görevleri bekle" demek daha
+   * yararlı. 90 sn, bir slotun boşalması için makul üst sınırdır.
+   */
+  const queueTimeoutMs = Math.max(
+    0,
+    Math.round(options.queueTimeoutMs ?? 90_000)
+  )
 
   let active = 0
   const used = new Map<string, number>()
@@ -232,7 +245,7 @@ export function limitMessage(
     reason === 'per-request'
       ? 'İstek başına alt ajan bütçesi doldu.'
       : reason === 'timeout'
-        ? 'Alt ajan sırası zaman aşımına uğradı.'
+        ? 'Eşzamanlılık sınırı dolu; alt ajan sırası açılmadı.'
         : reason === 'aborted'
           ? 'Koşu iptal edildi.'
           : 'Alt ajan başlatılamadı.'
@@ -244,6 +257,16 @@ export function limitMessage(
     parts.push(`etkin: ${snapshot.active}/${snapshot.maxConcurrent}`)
     if (snapshot.queued > 0) parts.push(`kuyruk: ${snapshot.queued}`)
     stats = ` (${parts.join(', ')})`
+  }
+  // Zaman aşımı bir bütçe hatası değildir: slot boşalınca aynı ajan açılabilir.
+  // Modele "hiç açma" demek yerine **nasıl** açacağını söylüyoruz.
+  if (reason === 'timeout') {
+    return (
+      `${detail}${stats} ` +
+      'Yeni ajan açmayı hemen tekrar denemek yerine önce çalışanları bekleyin: ' +
+      '`task_wait` ile mevcut görevlerden birinin sonucunu alın, sonra bu ajanı açın. ' +
+      'Zaten yeterli veri varsa yeni ajan açmadan devam edin.'
+    )
   }
   return `${detail}${stats} Elindeki sonuçlarla devam et; yeni alt ajan açma.`
 }

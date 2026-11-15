@@ -188,6 +188,35 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.18 Beta — koordinasyon da ilerlemedir; alt ajan bütçesi ve kuyruk
+
+Üç fazlı canlı sınamada (proje incelemesi / web araştırması / kodlama) iki yeni
+kusur ve bir ölçüm hatası bulundu.
+
+**Kusur 1 — sert eşik koordinasyonu ilerlemesiz saydı.** Ana ajanın adımları
+`spawn_agent` → `task_wait` → `task_wait` iken yönlendirme yine tetiklendi
+(günlükte `0 adım metinsiz` — çelişkinin kendisi). Sert eşik yalnızca ham adım
+sayısına bakıyordu. Artık `coordinationSignals` ilerleme sayılıyor; sert eşik
+12 adıma çıktı ve son 6 adımda taze ilerleme varsa erteleniyor.
+
+**Kusur 2 — alt ajan bütçesi dar.** Faz 1'de 3/3 ajan kısmi döndü
+(`akış bütçesi doldu (387 sn)`). Araçlar 1-3 sn; zaman modelin rapor
+üretiminde. Varsayılan 420 → **600 sn**, %75 uyarısı daha buyurgan.
+
+**Kusur 3 — kuyrukta 5 dk boşa bekleme.** 4. spawn 300 sn bekleyip reddedildi,
+model tekrar denedi ve geçti. Kuyruk zaman aşımı 300 → **90 sn**; ret mesajı
+"hiç açma" yerine "önce `task_wait` ile birini al" diyor.
+
+**Ölçüm hatası:** 0.4.17 testi "okuma sırasında yönlendirme 0" diyordu ama
+yönlendirme olay akışına yayınlanmıyor; kontrol boştu. Artık `main.log`
+satırları zaman penceresiyle sayılıyor.
+
+## Doğrulama
+
+`progress-guard-test` 63 (önceki 44), `agent-subagent-limit-test` 48.
+Toplam: **68 paket / 1657 kontrol**. typecheck ✓ build ✓ e2e ✓
+Ayrıntı: `docs/RELEASE-0.4.18.md`.
+
 # 0.4.17 Beta — ilerleme koruması okumayı "ilerleme" saymıyordu
 
 Bellek temizlenmiş hâlde aynı sorgu 0.4.16 ile yeniden koşuldu: Code Mode

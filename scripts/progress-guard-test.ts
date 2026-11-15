@@ -2,6 +2,7 @@
 import {
   PROGRESS_NUDGE,
   PROGRESS_NUDGE_FINAL,
+  isProductiveRead,
   progressNudgeMessage,
   shouldNudgeProgress,
   stalledStreak,
@@ -127,5 +128,50 @@ const noTools: StepObservation = { contentLength: 0, tools: [] }
   check('çok araçlı sessiz adımlar', shouldNudgeProgress(many), true)
 }
 
-console.log(`TOTAL=30 FAILED=${failed}`)
+// ============ 11) Okuma yapan sessiz adımlar ilerlemedir (0.4.17) ============
+// Canlı kusur: gemma-4-31b dört adımda dosya okudu, hiç metin yazmadı;
+// yönlendirme "araç çağırmayı bırak, raporla" dedi ve inceleme yarıda kesildi
+// (1886 kr rapor, sıfır alt ajan — oysa istem alt ajan istiyordu).
+{
+  const readStep = (reads: number): StepObservation => ({
+    contentLength: 0,
+    tools: ['run_command'],
+    productiveReads: reads
+  })
+
+  check('okumalı adımlar yönlendirme tetiklemez', shouldNudgeProgress([readStep(1), readStep(2), readStep(1), readStep(3)]), false)
+  check('okumasız adımlar hâlâ tetikler', shouldNudgeProgress([readStep(0), readStep(0), readStep(0), readStep(0)]), true)
+  check(
+    'karışık: son adım okumasız ise pencere bozulur',
+    shouldNudgeProgress([readStep(1), readStep(1), readStep(1), readStep(0)]),
+    false
+  )
+  check('stalledStreak okumada durur', stalledStreak([readStep(0), readStep(2), readStep(0)]), 1)
+}
+
+// ============ 12) Sert eşik: okumada ısrar eden model yine durdurulur ============
+{
+  const readStep = (reads: number): StepObservation => ({
+    contentLength: 0,
+    tools: ['run_command'],
+    productiveReads: reads
+  })
+  const endless = Array.from({ length: 8 }, () => readStep(1))
+  check('8 metinsiz okuma adımı → sert eşik', shouldNudgeProgress(endless), true)
+  check('7 adımda sert eşik yok', shouldNudgeProgress(endless.slice(0, 7)), false)
+  check('sert eşik yapılandırılabilir', shouldNudgeProgress(endless.slice(0, 5), 0, { hardThreshold: 5 }), true)
+}
+
+// ============ 13) Okuma tanımı ============
+{
+  check('run_command + içerik = okuma', isProductiveRead('run_command', true, 500), true)
+  check('execute + içerik = okuma', isProductiveRead('execute', true, 500), true)
+  check('read_file + içerik = okuma', isProductiveRead('read_file', true, 500), true)
+  check('başarısız araç okuma değil', isProductiveRead('read_file', false, 5000), false)
+  check('boş çıktı okuma değil', isProductiveRead('run_command', true, 10), false)
+  check('yazma aracı okuma değil', isProductiveRead('write_file', true, 500), false)
+  check('todo_write okuma değil', isProductiveRead('todo_write', true, 500), false)
+}
+
+console.log(`TOTAL=44 FAILED=${failed}`)
 process.exit(failed === 0 ? 0 : 1)

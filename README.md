@@ -188,6 +188,36 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.17 Beta — ilerleme koruması okumayı "ilerleme" saymıyordu
+
+Bellek temizlenmiş hâlde aynı sorgu 0.4.16 ile yeniden koşuldu: Code Mode
+düzeltmesi tuttu (15/15 kontrol), ama canlı koşu yeni bir kusur ortaya çıkardı.
+
+Model dosya **okurken** yönlendirme tetiklendi:
+
+```
+[warn] İlerlemesiz döngü: 4 adım metinsiz — yönlendirme #1
+[warn] İlerlemesiz döngü: 5 adım metinsiz — yönlendirme #2
+```
+
+Yönlendirme *"yeni tarama başlatma, araç çağırmayı bırak"* diyor. Model uydu:
+1886 kr yarım rapor, **sıfır alt ajan** — oysa istem alt ajan istiyordu.
+
+Kök neden: `shouldNudgeProgress` yalnızca **metin** uzunluğuna bakıyordu; dosya
+okuyan adım da "metinsiz" sayılıyordu.
+
+**Düzeltme:** okuma = ilerleme. Adımda başarılı ve içerik üreten bir okuma varsa
+o adım ilerlemesiz sayılmaz. Güvenlik ağı olarak **8** ardışık metinsiz adımda
+okuma olsa bile yönlendirme gönderilir.
+
+Bellek (`memory.bin`, 442 KB) yedeklenip silindi; koşu 0 hafıza kaydıyla başladı.
+
+## Doğrulama
+
+`progress-guard-test` 44 (önceki 30). Toplam: **68 paket / 1636 kontrol**
+(önceki 68/1622). typecheck ✓ build ✓ e2e ✓
+Ayrıntı: `docs/RELEASE-0.4.17.md`.
+
 # 0.4.16 Beta — Code Mode sessiz başarısızlığı
 
 İki paralel canlı sorguda (aynı istem, farklı model) bulundu: `gemma-4-31b`

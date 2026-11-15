@@ -21,6 +21,7 @@ import { buildSkillCatalog, buildSkillHint, routeSkills } from './skillCatalog'
 import {
   progressNudgeMessage,
   shouldNudgeProgress,
+  isProductiveRead,
   type StepObservation
 } from './progressGuard'
 import { logSubagent } from './subagentLog'
@@ -584,7 +585,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             steps: step + 1,
             toolCalls: toolCallCount,
             elapsedMs: Date.now() - startedAt,
-            contentLength: finalContent.length          }
+            contentLength: finalContent.length,
+          }
         })
         return {
           ok: true,
@@ -602,6 +604,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
         }))
       })
 
+      /** Bu adımda içerik üreten okuma sayısı (ilerleme ölçümü). */
+      let productiveReadsThisStep = 0
       for (const call of result.toolCalls) {
         if (controller.signal.aborted) {
           return { ok: false, content: 'Alt ajan durduruldu.' }
@@ -802,6 +806,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             }
           })
           messages.push({ role: 'tool', tool_call_id: call.id, content: execution.content })
+          if (isProductiveRead(call.name, execution.ok, execution.content.length)) {
+            productiveReadsThisStep += 1
+          }
         } catch (error) {
           const content = `Alt ajan araç hatası: ${
             error instanceof Error ? error.message : String(error)
@@ -842,7 +849,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       // limite takılıyor (canlı koşuda tam olarak bu oldu).
       stepHistory.push({
         contentLength: (result.content ?? '').trim().length,
-        tools: result.toolCalls.map((call) => call.name)
+        tools: result.toolCalls.map((call) => call.name),
+        productiveReads: productiveReadsThisStep
       })
       if (shouldNudgeProgress(stepHistory, nudgesSent)) {
         nudgesSent += 1

@@ -50,6 +50,7 @@ import {
   progressNudgeMessage,
   shouldNudgeProgress,
   stalledStreak,
+  isProductiveRead,
   type StepObservation
 } from './progressGuard'
 import { runSubagent } from './subagent'
@@ -1279,6 +1280,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         }))
       })
 
+      /** Bu adımda içerik üreten okuma sayısı (ilerleme ölçümü). */
+      let productiveReadsThisStep = 0
       for (const call of result.toolCalls) {
         if (controller.signal.aborted) {
           send({ requestId, type: 'done', finishReason: 'aborted' })
@@ -1384,6 +1387,12 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           })
           messages.push({ role: 'tool', tool_call_id: call.id, content: execution.content })
           executedTools.push({ name: call.name, ok: execution.ok })
+          // İlerleme ölçümü: içerik üreten okuma, "metinsiz adım"ı ilerleme
+          // saydırır (0.4.17). Aksi hâlde dört okuma adımı yönlendirmeyi
+          // tetikleyip incelemeyi yarıda kesiyordu.
+          if (isProductiveRead(call.name, execution.ok, execution.content.length)) {
+            productiveReadsThisStep += 1
+          }
 
           // Keşif gözlemi: "listeledin ama okumadın" durumunu izler.
           exploration = updateExploration(exploration, {
@@ -1423,7 +1432,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       // yalnızca hatırlatma yapılır (bkz. progressGuard.ts).
       stepHistory.push({
         contentLength: (result.content ?? '').trim().length,
-        tools: result.toolCalls.map((call) => call.name)
+        tools: result.toolCalls.map((call) => call.name),
+        productiveReads: productiveReadsThisStep
       })
       if (shouldNudgeProgress(stepHistory, nudgesSent)) {
         const nudge = progressNudgeMessage(nudgesSent)

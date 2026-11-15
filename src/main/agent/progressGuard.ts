@@ -35,6 +35,19 @@ export interface StepObservation {
   contentLength: number
   /** Çağrılan araç adları. */
   tools: string[]
+  /**
+   * Bu adımda **başarıyla** yapılan okuma sayısı.
+   *
+   * Neden: "metinsiz adım = ilerlemesiz adım" varsayımı yanlıştı. 0.4.16 canlı
+   * koşusunda gemma-4-31b dört adımda dosya okudu (kullanıcı içerik istemişti),
+   * hiç metin yazmadı ve yönlendirme "araç çağırmayı bırak, raporla" dedi.
+   * Sonuç: 1886 kr'lik yarım rapor ve **sıfır alt ajan** — oysa istem açıkça
+   * "maksimum seviyede alt ajan kullan" diyordu.
+   *
+   * Okuma bir ilerleme türüdür. Araç çağrısı yapıp hiçbir şey okumayan adım
+   * (ör. aynı komutu tekrar denemek) hâlâ ilerlemesiz sayılır.
+   */
+  productiveReads?: number
 }
 
 export const PROGRESS_NUDGE = `DURUM: Birkaç turdur yalnızca araç çağırıyorsun, kullanıcıya metin dönmedin.
@@ -55,10 +68,44 @@ export interface ProgressGuardOptions {
   threshold?: number
   /** Bir çalıştırmada en çok kaç yönlendirme gönderilsin. */
   maxNudges?: number
+  /**
+   * Sert eşik: okuma yapılsa bile bu kadar ardışık metinsiz adımdan sonra
+   * yönlendirme gönderilir. Sonsuz okuma döngüsüne karşı güvenlik ağı.
+   */
+  hardThreshold?: number
+}
+
+/** Okuma sayılan araçlar: içerik elde eden çağrılar. */
+const READ_TOOLS = new Set([
+  'read_file',
+  'grep',
+  'glob',
+  'list_files',
+  'code_search',
+  'repo_map',
+  'webfetch',
+  'websearch',
+  'run_command',
+  'execute',
+  'usb_devices'
+])
+
+/** Bir araç çağrısı içerik ürettiyse okuma sayılır. */
+export function isProductiveRead(toolName: string, ok: boolean, contentLength: number): boolean {
+  if (!ok || contentLength < 40) return false
+  return READ_TOOLS.has(toolName)
 }
 
 /**
  * Yönlendirme gönderilmeli mi?
+ *
+ * Bir adım "ilerlemesiz" sayılır eğer:
+ *  - o adımda metin üretilmedi, ve
+ *  - en az bir araç çağrıldı, ve
+ *  - **hiçbir okuma yapılmadı** (0.4.17: okuma da ilerlemedir).
+ *
+ * Güvenlik ağı: `hardThreshold` (varsayılan 8) ardışık metinsiz adımda okuma
+ * olsa bile yönlendirme gönderilir; aksi hâlde model sonsuza kadar okuyabilir.
  *
  * @param history  Bu çalıştırmadaki adımların gözlemleri (eskiden yeniye).
  * @param nudgesSent Bu çalıştırmada şimdiye kadar gönderilen yönlendirme sayısı.
@@ -70,14 +117,31 @@ export function shouldNudgeProgress(
 ): boolean {
   const threshold = Math.max(2, Math.round(options.threshold ?? 4))
   const maxNudges = Math.max(0, Math.round(options.maxNudges ?? 2))
+  const hardThreshold = Math.max(threshold, Math.round(options.hardThreshold ?? 8))
 
   if (nudgesSent >= maxNudges) return false
   if (history.length < threshold) return false
 
-  const window = history.slice(-threshold)
-  return window.every(
-    (step) => step.tools.length > 0 && step.contentLength === 0
-  )
+  const noText = (step: StepObservation): boolean =>
+    step.tools.length > 0 && step.contentLength === 0
+
+  // 1) Yumuşak eşik: metinsiz VE okumasız adımlar.
+  const softWindow = history.slice(-threshold)
+  if (
+    softWindow.every(
+      (step) => noText(step) && (step.productiveReads ?? 0) === 0
+    )
+  ) {
+    return true
+  }
+
+  // 2) Sert eşik: okuma olsa da uzun süre metin yok.
+  if (history.length >= hardThreshold) {
+    const hardWindow = history.slice(-hardThreshold)
+    if (hardWindow.every(noText)) return true
+  }
+
+  return false
 }
 
 /**
@@ -90,6 +154,8 @@ export function progressNudgeMessage(nudgesSent: number): string {
 
 /**
  * Ardışık ilerlemesiz adım sayısı (tanılama/log için).
+ *
+ * İlerlemesiz: metin yok, araç var, **okuma yok**.
  */
 export function stalledStreak(history: StepObservation[]): number {
   let streak = 0
@@ -97,6 +163,7 @@ export function stalledStreak(history: StepObservation[]): number {
     const step = history[index]
     if (!step) break
     if (step.tools.length === 0 || step.contentLength > 0) break
+    if ((step.productiveReads ?? 0) > 0) break
     streak += 1
   }
   return streak

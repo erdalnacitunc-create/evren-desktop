@@ -21,6 +21,7 @@ import { EvrenLogo } from './EvrenLogo'
 import { GlobalCommandPalette, type PaletteAction } from './GlobalCommandPalette'
 import { ParamsPanel } from './ParamsPanel'
 import { SettingsModal } from './SettingsModal'
+import { UpdateButton } from './UpdateButton'
 
 interface Props {
   models: ModelInfo[]
@@ -746,6 +747,7 @@ export function Workspace({
           <button className="btn-ghost" onClick={onRefresh}>
             Yenile
           </button>
+          <UpdateButton />
           <button className="btn-ghost danger" onClick={onSignOut}>
             Anahtarı sil
           </button>

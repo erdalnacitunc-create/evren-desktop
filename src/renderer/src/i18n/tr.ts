@@ -112,6 +112,12 @@ export const tr = {
   'update.checkShort': 'Güncelleme kontrol et',
   'update.downloadShort': 'Güncellemeyi indir',
   'update.downloaded': '{version} indirildi.',
+  'update.topbarCheck': 'Güncellemeleri denetle',
+  'update.topbarAvailable': 'v{version} hazır — indir',
+  'update.topbarReady': 'Kur ve yeniden başlat',
+  'update.topbarDownloading': 'İndiriliyor %{percent}',
+  'update.topbarError': 'Güncelleme hatası — yeniden dene',
+  'update.topbarCurrent': 'Güncel: v{version}',
 
   // ---------- terminal ----------
   'terminal.title': 'Terminal',

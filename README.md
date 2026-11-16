@@ -188,6 +188,22 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.22 Beta — üst çubukta güncelleme düğmesi
+
+Güncelleme akışı Ayarlar > Genel'e gömülüydü. Üst çubuğa **her zaman görünür**
+bir düğme eklendi; tek tıkla ilerler:
+
+`idle` → denetle · `available` → **mavi rozet + nabız** "v0.4.22 hazır — indir" ·
+`downloading` → yüzde · `downloaded` → **yeşil** "Kur ve yeniden başlat" ·
+`error` → kırmızı "yeniden dene" · `disabled` → gizli.
+
+Referans: opencode / Antigravity deseni. Davranış tablosu `lib/updateButton.ts`
+içinde saf fonksiyon; `update-button-test` (30 kontrol) ile doğrulanır.
+Koyu/açık tema, `prefers-reduced-motion`, dar ekranda yalnızca ikon.
+
+Toplam: **74 paket / 1821 kontrol**. Önizleme:
+`docs/update-button-preview.html`. Ayrıntı: `docs/RELEASE-0.4.22.md`.
+
 # 0.4.21 Beta — hız: alt ajan paralelliği, ön okuma, prompt önbelleği
 
 0.4.20 darboğazı: adım başına **88 sn**, araç payı **<%2**. Üç kaldıraç:

@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <title>Update button preview</title>
+    <style>
+      :root {
+        --bg: #0c1526;
+        --border: #1e2c44;
+        --border-soft: #16233b;
+        --text: #dbe6f5;
+        --muted: #8ea0bd;
+        --danger: #ff7b7b;
+      }
+      body {
+        margin: 0;
+        padding: 28px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Segoe UI', system-ui, sans-serif;
+      }
+      h2 {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--muted);
+        margin: 26px 0 10px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: #0f1a2d;
+        border: 1px solid var(--border-soft);
+        border-radius: 12px;
+        padding: 12px 16px;
+      }
+      .brand-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: #e7eefb;
+        margin-right: 8px;
+      }
+      .spacer {
+        margin-left: auto;
+      }
+      .btn-ghost {
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--muted);
+        border-radius: 9px;
+        padding: 7px 12px;
+        font-size: 12.5px;
+        font-family: inherit;
+        cursor: pointer;
+      }
+      .btn-ghost.danger:hover {
+        color: var(--danger);
+      }
+      .key-hint {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 11.5px;
+        color: var(--muted);
+        background: #0a1222;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 6px 9px;
+      }
+      /* --- kopya: update-button.css --- */
+      .update-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--muted);
+        border-radius: 9px;
+        padding: 7px 11px;
+        font-size: 12.5px;
+        font-family: inherit;
+        line-height: 1;
+        cursor: pointer;
+        white-space: nowrap;
+        transition:
+          color 0.12s ease,
+          border-color 0.12s ease,
+          background 0.12s ease,
+          box-shadow 0.18s ease;
+      }
+      .update-btn:hover:not(:disabled) {
+        color: var(--text);
+        border-color: #35507d;
+        background: #14213a;
+      }
+      .update-btn:disabled {
+        cursor: default;
+        opacity: 0.75;
+      }
+      .update-btn-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 13px;
+        height: 13px;
+      }
+      .update-btn-text {
+        font-variant-numeric: tabular-nums;
+      }
+      .update-btn.is-available {
+        color: #cfe3ff;
+        border-color: #2f5f9e;
+        background: linear-gradient(180deg, #16304f 0%, #122640 100%);
+        box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.08);
+      }
+      .update-btn.is-available:hover:not(:disabled) {
+        color: #e6f0ff;
+        border-color: #4a86d8;
+        background: linear-gradient(180deg, #1a3a5f 0%, #142c4a 100%);
+      }
+      .update-btn-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #58a6ff;
+        box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.6);
+        animation: update-dot-pulse 2s ease-out infinite;
+      }
+      @keyframes update-dot-pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.55);
+        }
+        70% {
+          box-shadow: 0 0 0 6px rgba(88, 166, 255, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(88, 166, 255, 0);
+        }
+      }
+      .update-btn.is-ready {
+        color: #b7f5c8;
+        border-color: #2f6b41;
+        background: linear-gradient(180deg, #14301f 0%, #10251a 100%);
+      }
+      .update-btn.is-ready:hover:not(:disabled) {
+        color: #d6ffe1;
+        border-color: #3f8f57;
+        background: linear-gradient(180deg, #173a26 0%, #122c1e 100%);
+      }
+      .update-btn.is-error {
+        color: #ffd7d7;
+        border-color: #5b2a2a;
+        background: #2a1616;
+      }
+      .update-btn.is-busy .update-btn-icon {
+        animation: update-spin 1.1s linear infinite;
+      }
+      @keyframes update-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Üst çubuk — gerçek yerleşim</h2>
+    <div class="topbar">
+      <span class="brand-title">EVREN Desktop</span>
+      <span class="key-hint">evre…T_j8</span>
+      <span class="spacer"></span>
+      <button class="btn-ghost">Ayarlar</button>
+      <button class="btn-ghost">Yenile</button>
+      <button class="update-btn is-available" title="v0.4.22 hazır — indir">
+        <span class="update-btn-icon">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+            <path d="M8 2.5v8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            <path
+              d="M4.6 7.2 8 10.6l3.4-3.4"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <path d="M3 13h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+        </span>
+        <span class="update-btn-text">v0.4.22 hazır — indir</span>
+        <span class="update-btn-dot"></span>
+      </button>
+      <button class="btn-ghost danger">Anahtarı sil</button>
+    </div>
+
+    <h2>Durumlar</h2>
+    <div class="row">
+      <button class="update-btn" title="Güncellemeleri denetle">
+        <span class="update-btn-icon">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M13.5 8a5.5 5.5 0 1 1-1.9-4.16"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+            <path
+              d="M14 2.2v3.4h-3.4"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </span>
+        <span class="update-btn-text">Güncellemeleri denetle</span>
+      </button>
+
+      <button class="update-btn is-busy" disabled>
+        <span class="update-btn-icon">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M13.5 8a5.5 5.5 0 1 1-1.9-4.16"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+            <path
+              d="M14 2.2v3.4h-3.4"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </span>
+        <span class="update-btn-text">İndiriliyor %42</span>
+      </button>
+
+      <button class="update-btn is-ready">
+        <span class="update-btn-icon">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M2.5 8a5.5 5.5 0 1 0 1.9-4.16"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+            <path
+              d="M2 2.2v3.4h3.4"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </span>
+        <span class="update-btn-text">Kur ve yeniden başlat</span>
+      </button>
+
+      <button class="update-btn is-error">
+        <span class="update-btn-icon">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M13.5 8a5.5 5.5 0 1 1-1.9-4.16"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+            <path
+              d="M14 2.2v3.4h-3.4"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </span>
+        <span class="update-btn-text">Güncelleme hatası — yeniden dene</span>
+      </button>
+    </div>
+  </body>
+</html>

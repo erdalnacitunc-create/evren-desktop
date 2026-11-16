@@ -107,6 +107,12 @@ export const en: Record<TranslationKey, string> = {
   'update.checkShort': 'Check for updates',
   'update.downloadShort': 'Download update',
   'update.downloaded': '{version} downloaded.',
+  'update.topbarCheck': 'Check for updates',
+  'update.topbarAvailable': 'v{version} ready — download',
+  'update.topbarReady': 'Install and restart',
+  'update.topbarDownloading': 'Downloading {percent}%',
+  'update.topbarError': 'Update failed — retry',
+  'update.topbarCurrent': 'Up to date: v{version}',
 
   // ---------- terminal ----------
   'terminal.title': 'Terminal',

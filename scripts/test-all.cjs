@@ -76,6 +76,7 @@ const SUITES = [
   { file: 'scripts/tools-parallel-e2e-test.ts', label: 'Paralel araç yürütmesi (uçtan uca)' },
   { file: 'scripts/prefetch-cache-test.ts', label: 'Ön okuma + prompt önbelleği', fast: true },
   { file: 'scripts/subagent-parallel-e2e-test.ts', label: 'Alt ajan paralel + ön okuma' },
+  { file: 'scripts/update-button-test.ts', label: 'Güncelleme düğmesi durumları', fast: true },
   { file: 'scripts/websearch-parse-test.ts', label: 'Web arama ayrıştırma', fast: true },
   { file: 'scripts/outside-workspace-hint-test.ts', label: 'Çalışma alanı dışı ipucu', fast: true },
   { file: 'scripts/web-research-hint-test.ts', label: 'Web araştırma ipucu', fast: true },

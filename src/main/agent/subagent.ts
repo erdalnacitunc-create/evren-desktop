@@ -27,6 +27,15 @@ import {
 } from './progressGuard'
 import { logSubagent } from './subagentLog'
 import { isAiError } from '../ai/error'
+import { performanceProfile } from './hardwareProfile'
+import { isTrimmableTool, trimToolOutput } from './toolOutput'
+import { runWithConcurrency, shouldRunInParallel } from './toolRunner'
+import {
+  appendPrefetch,
+  extractCandidates,
+  prefetchFiles,
+  prefetchNote
+} from './prefetch'
 
 export type SubagentType = 'explore' | 'review' | 'general'
 
@@ -469,6 +478,57 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
     ...(history ?? []),
     { role: 'user', content: prompt }
   ]
+
+  /**
+   * Ön okuma (warm start): istemde adı geçen dosyaları biz okuyup bağlama
+   * koyarız. Model "listele → tek tek oku → daralt" turlarında 2-5 adım
+   * harcıyor; her adım 60-90 sn. Bu, doğrudan kazanç.
+   *
+   * Yalnızca salt-okunur ajanlarda: yazma yapan ajan kendi akışını kursun.
+   */
+  const prefetched = readOnly
+    ? await prefetchFiles({
+        root: workspaceRoot,
+        candidates: extractCandidates(prompt, ownedFiles ?? [])
+      }).catch(() => [])
+    : []
+  if (prefetched.length > 0) {
+    // Önce kullanıcı iletisine notu ekle (ön okuma iletileri ondan SONRA
+    // ekleneceği için sıralama doğru kalır).
+    const userMessage = messages[messages.length - 1]
+    if (userMessage && userMessage.role === 'user' && typeof userMessage.content === 'string') {
+      userMessage.content = userMessage.content + prefetchNote(prefetched)
+    }
+    appendPrefetch(messages as unknown as Array<Record<string, unknown>>, prefetched)
+    // Ön okumayı arayüze de yansıt: alt ajanın hangi dosyaları hazır aldığı
+    // görünmeli (0.4.13 dersi: alt ajan eylemleri görünmez olmasın).
+    for (const [index, file] of prefetched.entries()) {
+      send({
+        requestId: parentRequestId,
+        type: 'tool-call',
+        call: {
+          id: `prefetch-${index}`,
+          name: 'read_file',
+          arguments: JSON.stringify({ path: file.path }),
+          agentType,
+          subagentTaskId
+        }
+      })
+      send({
+        requestId: parentRequestId,
+        type: 'tool-result',
+        result: {
+          toolCallId: `prefetch-${index}`,
+          name: 'read_file',
+          ok: true,
+          content: `ÖN OKUMA: ${file.path} (${file.content.length} kr)`,
+          agentType,
+          subagentTaskId
+        }
+      })
+    }
+  }
+
   const request: ChatRequest = { model, messages }
   const startedAt = Date.now()
   logSubagent({
@@ -484,6 +544,8 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       promptLength: prompt.length,
       workspaceRoot: workspaceRoot ?? null,
       continuation: (history?.length ?? 0) > 0,
+      prefetchedFiles: prefetched.map((file) => file.path),
+      prefetchedChars: prefetched.reduce((sum, file) => sum + file.content.length, 0),
       maxSteps: MAX_STEPS,
       maxToolCalls: MAX_TOOL_CALLS,
       deadlineMs: deadlineMs()
@@ -702,6 +764,19 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       /** Bu adımda içerik üreten okuma sayısı (ilerleme ölçümü). */
       let productiveReadsThisStep = 0
       let coordinationThisStep = 0
+
+      interface PreparedToolCall {
+        call: (typeof result.toolCalls)[number]
+        tool: NonNullable<ReturnType<typeof registry.get>>
+        args: Record<string, unknown>
+        checkpointId: string
+      }
+      /**
+       * Hazırlanan çağrılar. İzin/onay **sıralı** olmak zorunda (kullanıcı
+       * etkileşimi), ama onaylanmış salt-okunur çağrılar bağımsızdır.
+       */
+      const readyTools: PreparedToolCall[] = []
+
       for (const call of result.toolCalls) {
         if (controller.signal.aborted) {
           return { ok: false, content: 'Alt ajan durduruldu.' }
@@ -737,15 +812,13 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           })
           return {
             ok: true,
-            content: applyReportBudget((synthesized + changedTools)).text,
+            content: applyReportBudget(synthesized + changedTools).text,
             partial: true,
             partialReason: 'tools'
           }
         }
         toolCallCount += 1
         onProgress?.({ step, toolCalls: toolCallCount, lastTool: call.name })
-        /** Araç süresi: yavaş araçları (PowerShell -Recurse, ağ) ayırt etmek için. */
-        const toolStartedAt = Date.now()
 
         // Araç çağrısını **yayınla**: önceden yalnızca sonuç gidiyordu, bu
         // yüzden arayüz alt ajanın ne yaptığını gösteremiyor ve testler
@@ -848,20 +921,41 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           }
         }
 
+        readyTools.push({
+          call,
+          tool,
+          args,
+          checkpointId: `${parentRequestId}:sub:${toolCallCount}`
+        })
+      }
+
+      // ---- Yürütme: salt-okunur çağrılar paralel ----
+      // Canlı ölçüm: en yavaş alt ajanlar 20 adımda araçları **sırayla**
+      // çalıştırıyordu; sürenin bir kısmı burada birikiyordu. Aynı
+      // `toolRunner` mantığı alt ajana da uygulanır.
+      const toolPerf = performanceProfile()
+      const runPreparedTool = async (
+        item: PreparedToolCall
+      ): Promise<{
+        ok: boolean
+        content: string
+        imageDataUrl?: string
+        checkpointId?: string
+        todos?: unknown
+        durationMs: number
+      }> => {
+        const toolStartedAt = Date.now()
+        // Kalan bütçeyi araç zaman aşımına yansıt: son tarihe 10 sn kalana
+        // kadar araç çalışabilir, sonrası kesilir.
+        const remaining = Math.max(5_000, deadlineMs() - (Date.now() - startedAt) - 10_000)
         try {
-          // Kalan bütçeyi araç zaman aşımına yansıt: son tarihe 10 sn kalana
-          // kadar araç çalışabilir, sonrası kesilir.
-          const remaining = Math.max(
-            5_000,
-            deadlineMs() - (Date.now() - startedAt) - 10_000
-          )
           const execution = await runToolWithTimeout(
             (signal) =>
-              tool.execute(args, {
+              item.tool.execute(item.args, {
                 requestId: parentRequestId,
                 sessionId,
                 send,
-                checkpointId: `${parentRequestId}:sub:${toolCallCount}`,
+                checkpointId: item.checkpointId,
                 signal
               }),
             controller.signal,
@@ -873,9 +967,9 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             taskId: subagentTaskId,
             requestId: parentRequestId,
             agentType,
-            msg: `${call.name} ${execution.ok ? 'ok' : 'başarısız'}`,
+            msg: `${item.call.name} ${execution.ok ? 'ok' : 'başarısız'}`,
             data: {
-              tool: call.name,
+              tool: item.call.name,
               ok: execution.ok,
               durationMs: Date.now() - toolStartedAt,
               timeoutMs: Math.min(TOOL_TIMEOUT_MS, remaining),
@@ -883,31 +977,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
               error: execution.ok ? undefined : execution.content.slice(0, 300)
             }
           })
-          // Sonucu yayınla. 0.4.13'e kadar alt ajan yalnızca `tool-call`
-          // gönderiyordu; arayüz ve testler sonucu hiç göremiyordu. Bu,
-          // dosya sahipliği ihlalinin görünmez kalmasına da yol açıyordu.
-          send({
-            requestId: parentRequestId,
-            type: 'tool-result',
-            result: {
-              toolCallId: call.id,
-              name: call.name,
-              ok: execution.ok,
-              content: execution.content,
-              imageDataUrl: execution.imageDataUrl,
-              checkpointId: execution.checkpointId,
-              todos: execution.todos,
-              agentType,
-              subagentTaskId
-            }
-          })
-          messages.push({ role: 'tool', tool_call_id: call.id, content: execution.content })
-          if (isProductiveRead(call.name, execution.ok, execution.content.length)) {
-            productiveReadsThisStep += 1
-          }
-          if (isCoordinationProgress(call.name, execution.ok, execution.content.length)) {
-            coordinationThisStep += 1
-          }
+          return { ...execution, durationMs: Date.now() - toolStartedAt }
         } catch (error) {
           const content = `Alt ajan araç hatası: ${
             error instanceof Error ? error.message : String(error)
@@ -918,28 +988,83 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             taskId: subagentTaskId,
             requestId: parentRequestId,
             agentType,
-            msg: `${call.name} araç hatası`,
+            msg: `${item.call.name} araç hatası`,
             data: {
-              tool: call.name,
+              tool: item.call.name,
               ok: false,
               durationMs: Date.now() - toolStartedAt,
               timeoutMs: TOOL_TIMEOUT_MS,
               error: error instanceof Error ? error.message : String(error)
             }
           })
-          send({
-            requestId: parentRequestId,
-            type: 'tool-result',
-            result: {
-              toolCallId: call.id,
-              name: call.name,
-              ok: false,
-              content,
-              agentType,
-              subagentTaskId
-            }
-          })
-          messages.push({ role: 'tool', tool_call_id: call.id, content })
+          return { ok: false, content, durationMs: Date.now() - toolStartedAt }
+        }
+      }
+
+      let toolExecutions: Awaited<ReturnType<typeof runPreparedTool>>[]
+      if (
+        shouldRunInParallel(
+          readyTools.map((item) => ({ call: item.call })),
+          toolPerf.toolParallelism
+        )
+      ) {
+        const parallelStartedAt = Date.now()
+        toolExecutions = await runWithConcurrency(
+          readyTools,
+          toolPerf.toolParallelism,
+          runPreparedTool
+        )
+        logSubagent({
+          phase: 'step',
+          taskId: subagentTaskId,
+          requestId: parentRequestId,
+          agentType,
+          msg: `paralel araç: ${readyTools.length} çağrı · ${toolPerf.toolParallelism} eşzamanlı`,
+          data: { parallelMs: Date.now() - parallelStartedAt }
+        })
+      } else {
+        toolExecutions = []
+        for (const item of readyTools) toolExecutions.push(await runPreparedTool(item))
+      }
+
+      for (const [index, item] of readyTools.entries()) {
+        const execution = toolExecutions[index]!
+        // Sonucu yayınla. 0.4.13'e kadar alt ajan yalnızca `tool-call`
+        // gönderiyordu; arayüz ve testler sonucu hiç göremiyordu. Bu,
+        // dosya sahipliği ihlalinin görünmez kalmasına da yol açıyordu.
+        send({
+          requestId: parentRequestId,
+          type: 'tool-result',
+          result: {
+            toolCallId: item.call.id,
+            name: item.call.name,
+            ok: execution.ok,
+            content: execution.content,
+            imageDataUrl: execution.imageDataUrl,
+            checkpointId: execution.checkpointId,
+            todos: execution.todos as never,
+            agentType,
+            subagentTaskId
+          }
+        })
+        messages.push({
+          role: 'tool',
+          tool_call_id: item.call.id,
+          // Araç çıktısını modele girerken kırp (OpenAI ToolOutputTrimmer
+          // ilkesi). Alt ajanlarda `webfetch` 90+ KB dönebiliyor ve her
+          // sonraki adımda yeniden gönderiliyordu — sürenin asıl kaynağı.
+          content: isTrimmableTool(item.call.name)
+            ? trimToolOutput(execution.content, {
+                maxChars: toolPerf.maxToolOutputChars,
+                label: item.call.name
+              })
+            : execution.content
+        })
+        if (isProductiveRead(item.call.name, execution.ok, execution.content.length)) {
+          productiveReadsThisStep += 1
+        }
+        if (isCoordinationProgress(item.call.name, execution.ok, execution.content.length)) {
+          coordinationThisStep += 1
         }
       }
 

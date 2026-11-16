@@ -1,4 +1,0 @@
-158db1bfbcab1daa2a26eb514d2c00d4abe3549768c64fe061a06c67d1209bd7  EVREN-Desktop-Setup-0.4.19-x64.exe
-5f9c6b01fb88f5aa165ba546e3d889f9dd7cca230daa691dae8b084ffb4a1898  EVREN-Desktop-Setup-0.4.19-x64.exe.blockmap
-de0618d4f30f7ac38df9ed8b87afd1da85f16cd385afa4d7a8eb05975627a523  EVREN-Desktop-0.4.19-portable-x64.zip
-b1d8ce11db194de56f17e7ee2970dacee4abb68c60582339c8b7ad4ce8a831eb  latest.yml

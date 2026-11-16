@@ -55,6 +55,16 @@ import {
   type StepObservation
 } from './progressGuard'
 import { runSubagent } from './subagent'
+import { performanceProfile } from './hardwareProfile'
+import { isTrimmableTool, trimStaleToolOutputs, trimToolOutput } from './toolOutput'
+import { runWithConcurrency, shouldRunInParallel } from './toolRunner'
+import {
+  contextSize,
+  promptFingerprint,
+  shouldTrimStale,
+  wantsAnthropicCache,
+  withAnthropicCache
+} from './promptCache'
 import {
   formatSubagentLogs,
   logSubagent,
@@ -298,9 +308,19 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         ? await ensureAgentWorkspace(payload.sessionId)
         : null
 
+  /**
+   * Donanıma göre performans profili.
+   *
+   * Düşük bellekli/az çekirdekli makinelerde paralelliği kısmak için
+   * (bkz. `hardwareProfile.ts`). Araç paralelliği, alt ajan eşzamanlılığı ve
+   * araç çıktısı sınırı buradan gelir.
+   */
+  const perf = performanceProfile()
+
   // Alt ajan kapısı: eşzamanlılık + istek başına bütçe.
   // 0.4.5'e kadar sınırsızdı; model kaç kez çağırırsa o kadar koşu açılıyordu.
-  const subagentGate = createSubagentGate()
+  // Eşzamanlılık artık donanıma bağlı: zayıf makinede 1, normalde 2.
+  const subagentGate = createSubagentGate({ maxConcurrent: perf.subagentConcurrency })
   /**
    * Dosya sahipliği tablosu.
    *
@@ -900,7 +920,27 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     subagentTasks
   })
 
+  /**
+   * Önbellek süslemesi. Sağlayıcı Anthropic biçimliyse sistem + araç tanımları
+   * `cache_control` ile işaretlenir; diğerlerinde gövde olduğu gibi kalır
+   * (OpenAI-uyumlu ağ geçitleri öneki otomatik önbelleğe alır).
+   */
+  const cacheEnabled = wantsAnthropicCache(baseUrl)
+  const decorateBody = (body: Record<string, unknown>): Record<string, unknown> =>
+    cacheEnabled ? withAnthropicCache(body) : body
+  /** Sistem istemi parmak izi: koşu içinde değişirse günlüğe yazılır. */
+  let systemFingerprint = ''
+
   const messages: ChatMessage[] = [...payload.messages]
+  /**
+   * `tool_call_id` → araç adı.
+   *
+   * Eski araç çıktılarını kısaltırken (`trimStaleToolOutputs`) hangi iletinin
+   * kırpılabilir olduğunu bilmek gerekir: `task_wait` bir alt ajan **raporu**
+   * taşır ve asla kısaltılmaz. Mesaj nesnesinde araç adı yok (yalnızca
+   * kimlik var), bu yüzden eşleme burada tutulur.
+   */
+  const toolNameByCallId = new Map<string, string>()
   // Skill kataloğu: tüm gövdeler yerine ad + kısa açıklama, bütçeyle sınırlı.
   // Görev metnine göre en uygun 3 skill işaretlenir (gövde yine istek üzerine).
   const routedSkills = routeSkills(skills, lastUserTextOf(messages))
@@ -1105,13 +1145,13 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       // günlüğünde tam olarak bu yaşandı ve nihai yanıt isteği düştü,
       // yerine yedek özet yazıldı.
       const finalTools = registry.definitions()
-      const body = {
+      const body = decorateBody({
         ...buildBaseBody(payload),
         messages: [...messages, { role: 'user' as const, content: note }],
         ...(finalTools.length > 0
           ? { tools: finalTools, tool_choice: 'none' as const }
           : {})
-      }
+      })
       const result = await streamCompletion(
         baseUrl,
         apiKey,
@@ -1176,15 +1216,51 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
 
       if (step > 0) applySteering()
 
-      const body = {
+      /**
+       * Eski araç çıktılarını kısalt (OpenAI `ToolOutputTrimmer` ilkesi).
+       *
+       * Son iki kullanıcı turu tam kalır; daha eskiler önizlemeye iner.
+       * 93 KB'lık bir `webfetch` sonucu her adımda yeniden gönderilmesin diye
+       * hem girişte (`trimToolOutput`) hem burada kırpılır.
+       */
+      const staleTrim = shouldTrimStale(messages)
+        ? trimStaleToolOutputs(messages, {
+            recentTurns: 2,
+            maxChars: perf.maxToolOutputChars,
+            previewChars: perf.staleToolOutputChars,
+            toolNameOf: (message) => toolNameByCallId.get(String(message.tool_call_id ?? '')),
+            trimmableTools: (name) => (name ? isTrimmableTool(name) : false)
+          })
+        : { messages, trimmedCount: 0 }
+      if (staleTrim.trimmedCount > 0) {
+        log.info(
+          `Eski araç çıktısı kısaltıldı: ${staleTrim.trimmedCount} ileti ` +
+            `(bağlam ${contextSize(messages)} kr, önbellek eşiği aşıldı)`
+        )
+      }
+      const modelMessages = staleTrim.messages
+
+      // Sistem istemi koşu içinde değişmemeli: önek önbelleğinin şartı.
+      const systemText =
+        typeof modelMessages[0]?.content === 'string' ? String(modelMessages[0].content) : ''
+      const fingerprint = promptFingerprint(systemText)
+      if (systemFingerprint && systemFingerprint !== fingerprint) {
+        log.warn(
+          `Sistem istemi koşu ortasında değişti (${systemFingerprint} → ${fingerprint}); ` +
+            'önek önbelleği sıfırlanacak'
+        )
+      }
+      systemFingerprint = fingerprint
+
+      const body = decorateBody({
         ...buildBaseBody(payload),
         messages: stepLimitReached
-          ? [...messages, { role: 'user' as const, content: MAX_STEPS_PROMPT }]
-          : messages,
+          ? [...modelMessages, { role: 'user' as const, content: MAX_STEPS_PROMPT }]
+          : modelMessages,
         // Araç tanımları son turda da korunur (OpenCode: sağlayıcı önbelleği).
         tools: registry.definitions(),
         tool_choice: stepLimitReached ? 'none' : 'auto'
-      }
+      })
 
       // OpenCode ile aynı: kesilen akış ya da token limiti durumunda yanıt
       // kaldığı yerden devam ettirilir, kullanıcı yarım yanıtla kalmaz.
@@ -1285,6 +1361,23 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       let productiveReadsThisStep = 0
       /** Bu adımda yapılan koordinasyon işi (alt ajan başlatma/bekleme). */
       let coordinationThisStep = 0
+
+      /**
+       * Adımın hazırlanmış araç çağrıları.
+       *
+       * Neden iki faz: izin/onay **sıralı** olmak zorunda (kullanıcı etkileşimi),
+       * ama onaylanmış salt-okunur çağrılar bağımsızdır ve paralel çalışabilir.
+       * Anthropic'in çoklu ajan yazısı tam bunu öneriyor: *"the subagents use
+       * 3+ tools in parallel … cut research time by up to 90%"*.
+       */
+      interface PreparedCall {
+        call: (typeof result.toolCalls)[number]
+        tool: NonNullable<ReturnType<typeof registry.get>>
+        args: Record<string, unknown>
+        checkpointId: string
+      }
+      const ready: PreparedCall[] = []
+
       for (const call of result.toolCalls) {
         if (controller.signal.aborted) {
           send({ requestId, type: 'done', finishReason: 'aborted' })
@@ -1306,6 +1399,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             type: 'tool-result',
             result: { toolCallId: call.id, name: call.name, ok: false, content }
           })
+          toolNameByCallId.set(call.id, call.name)
           messages.push({ role: 'tool', tool_call_id: call.id, content })
           executedTools.push({ name: call.name, ok: false })
           continue
@@ -1332,6 +1426,7 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             type: 'tool-result',
             result: { toolCallId: call.id, name: call.name, ok: false, content }
           })
+          toolNameByCallId.set(call.id, call.name)
           messages.push({ role: 'tool', tool_call_id: call.id, content })
           continue
         }
@@ -1362,75 +1457,102 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
             type: 'tool-result',
             result: { toolCallId: call.id, name: call.name, ok: false, content }
           })
+          toolNameByCallId.set(call.id, call.name)
           messages.push({ role: 'tool', tool_call_id: call.id, content })
           continue
         }
 
+        ready.push({ call, tool, args, checkpointId: `${requestId}:${toolCallCount}` })
+      }
+
+      // ---- Faz B: yürütme ----
+      const runOne = async (
+        item: PreparedCall
+      ): Promise<{ ok: boolean; content: string; imageDataUrl?: string; checkpointId?: string; todos?: unknown; error?: string }> => {
         try {
-          const checkpointId = `${requestId}:${toolCallCount}`
-          const execution = await tool.execute(args, {
+          const execution = await item.tool.execute(item.args, {
             requestId,
             sessionId: payload.sessionId,
             send,
-            checkpointId,
+            checkpointId: item.checkpointId,
             signal: controller.signal
           })
-          send({
-            requestId,
-            type: 'tool-result',
-            result: {
-              toolCallId: call.id,
-              name: call.name,
-              ok: execution.ok,
-              content: execution.content,
-              imageDataUrl: execution.imageDataUrl,
-              checkpointId: execution.checkpointId,
-              todos: execution.todos
-            }
-          })
-          messages.push({ role: 'tool', tool_call_id: call.id, content: execution.content })
-          executedTools.push({ name: call.name, ok: execution.ok })
-          // İlerleme ölçümü: içerik üreten okuma, "metinsiz adım"ı ilerleme
-          // saydırır (0.4.17). Aksi hâlde dört okuma adımı yönlendirmeyi
-          // tetikleyip incelemeyi yarıda kesiyordu.
-          if (isProductiveRead(call.name, execution.ok, execution.content.length)) {
-            productiveReadsThisStep += 1
-          }
-          if (isCoordinationProgress(call.name, execution.ok, execution.content.length)) {
-            coordinationThisStep += 1
-          }
-
-          // Keşif gözlemi: "listeledin ama okumadın" durumunu izler.
-          exploration = updateExploration(exploration, {
-            toolName: call.name,
-            ok: execution.ok,
-            content: execution.content
-          })
-          // Web araştırması sayacı: 3+ arama paralel alt ajana uygun olabilir.
-          if (execution.ok) {
-            if (call.name === 'websearch') webResearch.searches += 1
-            if (call.name === 'webfetch') webResearch.fetches += 1
-          }
-          if (call.name === 'spawn_agent' && execution.ok) subagentsSpawned += 1
-
-          if (execution.imageDataUrl) {
-            messages.push({
-              role: 'user',
-              content: [
-                { type: 'text', text: 'Araç tarafından alınan ekran görüntüsü:' },
-                { type: 'image_url', image_url: { url: execution.imageDataUrl } }
-              ]
-            })
-          }
+          return execution
         } catch (error) {
-          const content = `Araç hatası: ${error instanceof Error ? error.message : String(error)}`
-          send({
-            requestId,
-            type: 'tool-result',
-            result: { toolCallId: call.id, name: call.name, ok: false, content }
-          })
-          messages.push({ role: 'tool', tool_call_id: call.id, content })
+          return {
+            ok: false,
+            content: `Araç hatası: ${error instanceof Error ? error.message : String(error)}`,
+            error: error instanceof Error ? error.message : String(error)
+          }
         }
+      }
+
+      let executions: Array<Awaited<ReturnType<typeof runOne>>>
+      if (shouldRunInParallel(ready, perf.toolParallelism)) {
+        const startedAt = Date.now()
+        executions = await runWithConcurrency(ready, perf.toolParallelism, runOne)
+        log.info(
+          `paralel araç: ${ready.length} çağrı · ${perf.toolParallelism} eşzamanlı · ` +
+            `${Date.now() - startedAt} ms`
+        )
+      } else {
+        executions = []
+        for (const item of ready) executions.push(await runOne(item))
+      }
+
+      for (const [index, item] of ready.entries()) {
+        const execution = executions[index]!
+        const rawContent = execution.content
+        // Girişte kırp: 93 KB'lık webfetch her sonraki adımda yeniden
+        // gönderilmesin (OpenAI ToolOutputTrimmer ilkesi).
+        const content = isTrimmableTool(item.call.name)
+          ? trimToolOutput(rawContent, { maxChars: perf.maxToolOutputChars, label: item.call.name })
+          : rawContent
+
+        send({
+          requestId,
+          type: 'tool-result',
+          result: {
+            toolCallId: item.call.id,
+            name: item.call.name,
+            ok: execution.ok,
+            content: rawContent,
+            imageDataUrl: execution.imageDataUrl,
+            checkpointId: execution.checkpointId,
+            todos: execution.todos as never
+          }
+        })
+        toolNameByCallId.set(item.call.id, item.call.name)
+        messages.push({ role: 'tool', tool_call_id: item.call.id, content })
+        // Ekran görüntüsü ayrı bir kullanıcı iletisi olarak eklenir; model
+        // görseli araç metni içinde göremez.
+        if (execution.imageDataUrl) {
+          messages.push({
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Araç tarafından alınan ekran görüntüsü:' },
+              { type: 'image_url', image_url: { url: execution.imageDataUrl } }
+            ]
+          })
+        }
+        executedTools.push({ name: item.call.name, ok: execution.ok })
+
+        if (isProductiveRead(item.call.name, execution.ok, rawContent.length)) {
+          productiveReadsThisStep += 1
+        }
+        if (isCoordinationProgress(item.call.name, execution.ok, rawContent.length)) {
+          coordinationThisStep += 1
+        }
+        exploration = updateExploration(exploration, {
+          toolName: item.call.name,
+          ok: execution.ok,
+          content: rawContent
+        })
+        if (execution.ok) {
+          if (item.call.name === 'websearch') webResearch.searches += 1
+          if (item.call.name === 'webfetch') webResearch.fetches += 1
+        }
+        if (item.call.name === 'spawn_agent' && execution.ok) subagentsSpawned += 1
       }
 
       // İlerlemesiz döngü koruması: birkaç turdur metin üretilmiyorsa modele

@@ -188,6 +188,25 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.21 Beta — hız: alt ajan paralelliği, ön okuma, prompt önbelleği
+
+0.4.20 darboğazı: adım başına **88 sn**, araç payı **<%2**. Üç kaldıraç:
+
+1. **Alt ajan içinde paralel araç** — hazırlık (izin/onay) sıralı, yürütme
+   paralel; salt-okunur çağrılar donanım profiline göre eşzamanlı, yazma varsa
+   hepsi seri. Kanıt: `paralel araç: 3 çağrı · 3 eşzamanlı`.
+2. **Ön okuma (warm start)** — istemde adı geçen dosyalar ajan başlamadan
+   okunup bağlama konur (en fazla 8 dosya, 60 kB); isteme "tekrar okuma,
+   analize geç" notu. Ajan başına 2-5 adım kazanç.
+3. **Prompt önbelleği** — eski tur kırpma artık yalnızca bağlam 80 kB'ı
+   geçince (önek bozulmasın); Anthropic için `cache_control` desteği
+   (`EVREN_PROMPT_CACHE=anthropic`); sistem istemi parmak iziyle değişim uyarısı.
+
+## Doğrulama
+
+`prefetch-cache-test` 40, `subagent-parallel-e2e-test` 8. Toplam:
+**73 paket / 1791 kontrol**. Ayrıntı: `docs/RELEASE-0.4.21.md`.
+
 # 0.4.19 Beta — alt ajan rapor bütçesi (süre ve kısmi sonuç)
 
 0.4.18 üç fazlı koşusu: alt ajan adımı başına **88 sn**, araç payı **<%2**,

@@ -26,7 +26,9 @@ import type { ChatRequest, SubagentTaskInfo, ToolResultInfo } from '../src/share
 
 const profile = join(process.env.APPDATA ?? '', 'EVREN Desktop Beta')
 const dataDir = process.env.EVREN_TEST_DATA as string
-mkdirSync(dataDir, { recursive: true })
+mkdirSync(join(dataDir, 'logs'), { recursive: true })
+// Alt ajan günlüğü bu koşuya ait olmalı: ön okuma ölçümü buradan okunuyor.
+process.env['EVREN_SUBAGENT_LOG_DIR'] = join(dataDir, 'logs')
 for (const name of ['credentials.bin', 'settings.json', 'Local State']) {
   const from = join(profile, name)
   if (existsSync(from)) copyFileSync(from, join(dataDir, name))
@@ -57,6 +59,10 @@ interface PhaseResult {
   tools: Record<string, number>
   events: number
   nudges: number
+  parallelTriggers: number
+  parallelCalls: number
+  prefetchedTotal: number
+  prefetchedAgents: number
   emptyExecutes: number
 }
 
@@ -92,6 +98,78 @@ function countNudges(fromMs: number, toMs: number): number {
     return count
   } catch {
     return -1
+  }
+}
+
+/** Zaman penceresindeki main.log satırları. */
+function readLogText(fromMs: number, toMs: number): string {
+  try {
+    const file = join(process.env.EVREN_TEST_DATA as string, 'logs', 'main.log')
+    if (!existsSync(file)) return ''
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => {
+        const match = /^\[(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\.(\d{3})\]/.exec(line)
+        if (!match) return false
+        const at = new Date(
+          Number(match[1]),
+          Number(match[2]) - 1,
+          Number(match[3]),
+          Number(match[4]),
+          Number(match[5]),
+          Number(match[6]),
+          Number(match[7])
+        ).getTime()
+        return at >= fromMs - 5000 && at <= toMs + 5000
+      })
+      .join('\n')
+  } catch {
+    return ''
+  }
+}
+
+interface StartLog {
+  taskId?: string
+  agentType?: string
+  files?: string[]
+}
+
+/** Alt ajan `start` olaylarındaki ön okuma bilgisi (subagent-events.jsonl). */
+function subagentStartLogs(fromMs: number, toMs: number): StartLog[] {
+  try {
+    const file = join(process.env.EVREN_SUBAGENT_LOG_DIR as string, 'subagent-events.jsonl')
+    if (!existsSync(file)) return []
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as {
+            at?: number
+            phase?: string
+            taskId?: string
+            agentType?: string
+            data?: { prefetchedFiles?: string[] }
+          }
+        } catch {
+          return null
+        }
+      })
+      .filter(
+        (event): event is NonNullable<typeof event> =>
+          Boolean(event) &&
+          event!.phase === 'start' &&
+          typeof event!.at === 'number' &&
+          event!.at! >= fromMs - 5000 &&
+          event!.at! <= toMs + 5000
+      )
+      .map((event) => ({
+        taskId: event.taskId,
+        agentType: event.agentType,
+        files: event.data?.prefetchedFiles ?? []
+      }))
+  } catch {
+    return []
   }
 }
 
@@ -196,6 +274,21 @@ async function runPhase(options: {
   const nudges = countNudges(startedAt, finishedAt)
   if (nudges < 0) console.log('  (uyarı: main.log okunamadı, yönlendirme sayısı bilinmiyor)')
 
+  // 0.4.21 ölçümleri: paralel araç tetiklenmesi ve ön okuma.
+  const mainLog = readLogText(startedAt, finishedAt)
+  const parallelTriggers = (mainLog.match(/paralel araç: \d+ çağrı/g) ?? []).length
+  const parallelCalls = [...mainLog.matchAll(/paralel araç: (\d+) çağrı/g)].reduce(
+    (sum, match) => sum + Number(match[1]),
+    0
+  )
+  const prefetchedTotal = subagentStartLogs(startedAt, finishedAt).reduce(
+    (sum, entry) => sum + (entry.files?.length ?? 0),
+    0
+  )
+  const prefetchedAgents = subagentStartLogs(startedAt, finishedAt).filter(
+    (entry) => (entry.files?.length ?? 0) > 0
+  ).length
+
   const emptyExecutes = results.filter(
     (result) =>
       result.name === 'execute' &&
@@ -214,6 +307,10 @@ async function runPhase(options: {
     tools,
     events: sink.events.length,
     nudges,
+    parallelTriggers,
+    parallelCalls,
+    prefetchedTotal,
+    prefetchedAgents,
     emptyExecutes
   }
 }
@@ -361,7 +458,8 @@ app.whenReady().then(async () => {
       `${row.label.slice(0, 6)} | ${String(row.seconds).padStart(5)}sn | ` +
         `araç ${String(Object.values(row.tools).reduce((a, b) => a + b, 0)).padStart(3)} | ` +
         `spawn ${spawnOk}/${row.spawns.length} | kısmi ${partial}/${row.tasks.length} | ` +
-        `yanıt ${String(row.text.length).padStart(5)} kr | yönlendirme ${row.nudges}`
+        `yanıt ${String(row.text.length).padStart(5)} kr | yönlendirme ${row.nudges} | ` +
+        `paralel ${row.parallelTriggers}/${row.parallelCalls} | ön okuma ${row.prefetchedAgents} ajan/${row.prefetchedTotal} dosya`
     )
   }
 

@@ -188,6 +188,36 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.23 Beta — eval katmanı: kalite ölçümü (OpenAI Evals paterni)
+
+Deterministik testler "kod yolu doğru mu" sorusunu yanıtlıyordu; **"çıktı iyi
+mi"** ölçülmüyordu. İki katman eklendi:
+
+| Katman | Ne yapar |
+|---|---|
+| Basic eval | Kural tabanlı: regex, uzunluk, yasak ifade |
+| Model-graded | LLM hakem, ağırlıklı rubrik |
+
+Rubrik: doğruluk 0.30 · kanıt 0.20 · tamlık 0.20 · **dürüstlük 0.20** ·
+verimlilik 0.10. 5 senaryo, her biri geçmişte gerçekten yanlış giden bir
+davranışı hedefliyor (uydurma `/status` ucu, çöp arama sonucu, olmayan dosyayı
+uydurma, araç israfı, "erişim kısıtı" bahanesi).
+
+## Ölçümün kendisinde bulunan iki kusur
+
+1. **Hakem sessizce boş dönüyordu** — yanlış API yolu (`/chat/completions` →
+   404) ve hata yutuluyordu. Bu, 0.4.14/0.4.16 kusurlarının **üçüncü tekrarı**:
+   başarısızlığı başarı gibi raporlamak.
+2. **Kesilen JSON tüm puanı siliyordu** — `max_tokens` sınırında model tam
+   ortada kesiliyor, `JSON.parse` başarısız oluyor, hiçbir ölçüt
+   kurtarılmıyordu. Artık tam JSON → yoksa regex ile kısmi kurtarma.
+
+Kanıt (`judge-live-test`, gerçek sağlayıcı): orta kaliteli çıktı → beş ölçüt,
+**0.30**. Hakem ayırt edici.
+
+**77 paket · 1886 kontrol**. Ayrıntı: `docs/RELEASE-0.4.23.md`,
+`docs/EVALS.md`, `docs/VERIFICATION-EVALS-2TUR.md`.
+
 # 0.4.22 Beta — üst çubukta güncelleme düğmesi
 
 Güncelleme akışı Ayarlar > Genel'e gömülüydü. Üst çubuğa **her zaman görünür**

@@ -159,6 +159,8 @@ export function updateSubagentTask(
       | 'error'
       | 'partial'
       | 'partialReason'
+      | 'verified'
+      | 'verifySummary'
       | 'progress'
       | 'attempts'
       | 'lastAttemptAt'

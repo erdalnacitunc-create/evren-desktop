@@ -349,12 +349,21 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     status: string
     partial?: boolean
     partialReason?: string
+    verified?: boolean
   }): void => {
     const label = task.description ? `${task.description} · ` : ''
     const partialNote = task.partial ? ` [KISMİ — ${task.partialReason ?? 'bütçe'}]` : ''
+    // Doğrulama başarısızsa bildirim bunu taşımalı: aksi hâlde ana ajan
+    // sonucu "tamamlandı" sanıp yanlış rapor yazar.
+    const verifyNote =
+      task.verified === undefined
+        ? ''
+        : task.verified
+          ? ' [DOĞRULAMA ✓]'
+          : ' [DOĞRULAMA BAŞARISIZ — sonucu doğrulanmış sayma]'
     pendingSubagentNotices.push(
       `ALT AJAN BİLDİRİMİ: ${label}${task.agentType} (${task.id.slice(0, 12)}) ` +
-        `durum=${task.status}${partialNote}. ` +
+        `durum=${task.status}${partialNote}${verifyNote}. ` +
         'Sonucu `task_wait` ile al.\n' +
         'Bu bir hatırlatmadır, yeni bir görev değildir. Yanıtını **baştan yazma**: ' +
         'zaten yazdığın yanıt varsa yalnızca yeni bulguları ekleyecek kısa bir bölüm ' +
@@ -379,6 +388,8 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     content: string
     partial?: boolean
     partialReason?: 'steps' | 'tools' | 'deadline' | 'tool-timeout'
+    verified?: boolean
+    verify?: { ran: boolean; ok: boolean; summary: string }
   }> =>
     runSubagent({
       parentRequestId: requestId,
@@ -569,11 +580,23 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           })
           // Kısmi sonuç açıkça etiketlenir: ana ajan tahmin etmek zorunda kalmasın.
           const marker = result.partial ? `[KISMİ — ${result.partialReason}]` : ''
+          // Doğrulama sonucu da etiketlenir: "bitti" demek "doğrulandı" demek değil.
+          // Ölçülemeyen durum "başarısız" değil, ayrı bir etiket taşır.
+          const verifyMark = !result.verify
+            ? ''
+            : !result.verify.ran
+              ? '[DOĞRULAMA YOK — doğrulanmadı]'
+              : result.verify.ok
+                ? '[DOĞRULAMA ✓]'
+                : '[DOĞRULAMA BAŞARISIZ]'
+          const marks = [marker, verifyMark].filter(Boolean).join(' ')
           return {
             ok: result.ok,
             content:
-              `Alt ajan (${agentType}) sonucu${marker ? ' ' + marker : ''}:\n\n` +
-              result.content
+              `Alt ajan (${agentType}) sonucu${marks ? ' ' + marks : ''}:\n\n` +
+              result.content,
+            verified: result.verified,
+            verify: result.verify
           }
         } finally {
           subagentGate.release(requestId)
@@ -660,7 +683,9 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
               result: result.ok ? result.content : undefined,
               error: result.ok ? undefined : result.content,
               partial: result.partial,
-              partialReason: result.partialReason
+              partialReason: result.partialReason,
+              verified: result.verified,
+              verifySummary: result.verify?.summary
             })
           }
           const updated = getSubagentTask(taskId)
@@ -718,7 +743,12 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
       )
       const lines = [
         `${info.agentType} · ${info.id}`,
-        `durum: ${info.status}${info.partial ? ` (kısmi — ${info.partialReason ?? 'bütçe'})` : ''}`,
+        `durum: ${info.status}${info.partial ? ` (kısmi — ${info.partialReason ?? 'bütçe'})` : ''}` +
+          (info.status === 'done' && info.verified !== undefined
+            ? info.verified
+              ? ' · doğrulama ✓'
+              : ' · doğrulama BAŞARISIZ'
+            : ''),
         `süre: ${elapsed} sn · deneme: ${info.attempts ?? 1}`
       ]
       if (info.description) lines.push(`etiket: ${info.description}`)
@@ -776,10 +806,18 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
 
       if (info.status === 'done') {
         const marker = info.partial ? `[KISMİ — ${info.partialReason ?? 'bütçe'}]` : ''
+        // Doğrulama sonucu kısmi etiketten bağımsız: kısmi olmayan bir koşu da
+        // doğrulanmamış olabilir (kontrol tanımsız).
+        const verifyMark =
+          info.verified === undefined
+            ? ''
+            : info.verified
+              ? ' [DOĞRULAMA ✓]'
+              : ' [DOĞRULAMA BAŞARISIZ]'
         return {
           ok: true,
           content:
-            `Alt ajan (${info.agentType}) sonucu${marker ? ' ' + marker : ''}:\n\n` +
+            `Alt ajan (${info.agentType}) sonucu${marker ? ' ' + marker : ''}${verifyMark}:\n\n` +
             (info.result ?? '(sonuç yok)')
         }
       }
@@ -1009,8 +1047,14 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     'ekle ve çelişki varsa düzelt.' +
     '\n- Bir alt ajan takıldı/garip sonuç verdi diye düşünüyorsan `task_logs` ile adım, ' +
     'araç süresi ve hata kaydını oku.' +
-    '\n- Kod incelemesi veya risk taraması → `review` alt ajanı.' +
-    '\n- Bağımsız, çok adımlı uygulama işi → `general` alt ajanı.' +
+    '\n- Kod incelemesi veya risk taraması → `review` alt ajanı. Bu ajan bu oturumdaki ' +
+    'değişikliklerin diff\'ini otomatik alır; ona "neyi incele" diye tarif etmek yerine ' +
+    'odak ver (güvenlik, hata, performans).' +
+    '\n- Bağımsız, çok adımlı uygulama işi → `general` alt ajanı. Bu ajan bitirince ' +
+    'typecheck/test **otomatik** çalışır; sonucu `[DOĞRULAMA ✓]` veya ' +
+    '`[DOĞRULAMA BAŞARISIZ]` etiketinden gör. Başarısızsa "tamamlandı" deme.' +
+    '\n- `[DOĞRULAMA BAŞARISIZ]` sonucu `task_continue` ile aynı ajana düzelttir; ' +
+    'testi gevşetmesine izin verme, hatayı düzelttir.' +
     '\n- Tek dosya, tek komut veya zaten bildiğin bir yerde arama → **devretme**, doğrudan yap.' +
     '\n- Görev metni kendi kendine yetsin: hedef + okunacak dosya/dizin + beklenen çıktı biçimi. ' +
     '"Şuna bak" gibi belirsiz görev verme; alt ajanlar aynı işi tekrarlar.' +

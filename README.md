@@ -188,6 +188,26 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.24 Beta — doğrulama kapısı + taze bağlamlı inceleme
+
+Alt ajan mimarisinde **ölçümün kendisi** güçlendirildi. Yeni yetenek değil;
+yanlış "bitti" raporları yapısal olarak kapatıldı.
+
+| Katman | Ne yapar |
+|---|---|
+| Doğrulama kapısı | `general` ajanı yazdıysa typecheck/test **kod tarafından** çalışır; geçmezse model en fazla 2 tur düzeltmeye geri gönderilir |
+| İnceleme paketi | `review` ajanı bu oturumdaki değişikliklerin diff'ini hazır bağlam alır |
+
+Ölçemediğinde başarı göstermez: kontrol tanımsızsa, kapı çöktüyse veya bütçe
+kesildiyse rapor **"doğrulanmadı"** der. Düzeltme istemi testi
+silmeyi/gevşetmeyi açıkça yasaklar (reward-tampering savunması).
+
+Ana ajana yansıma: `spawn_agent` sonucu `[DOĞRULAMA ✓]` ·
+`[DOĞRULAMA BAŞARISIZ]` · `[DOĞRULAMA YOK — doğrulanmadı]` etiketi taşır.
+
+**80 paket · 1963 kontrol**. Ayrıntı: `docs/RELEASE-0.4.24.md`,
+`docs/VERIFICATION-GATE.md`.
+
 # 0.4.23 Beta — eval katmanı: kalite ölçümü (OpenAI Evals paterni)
 
 Deterministik testler "kod yolu doğru mu" sorusunu yanıtlıyordu; **"çıktı iyi

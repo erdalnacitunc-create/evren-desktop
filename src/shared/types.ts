@@ -331,6 +331,13 @@ export interface SubagentTaskInfo {
   partial?: boolean
   /** Sonucun hangi nedenle kesildiği. */
   partialReason?: 'steps' | 'tools' | 'deadline' | 'tool-timeout'
+  /**
+   * Yazma yapan ajanın doğrulama kapısı sonucu (0.4.24).
+   * `undefined` = kapı uygulanmadı; `false` = geçmedi **veya** ölçülemedi.
+   */
+  verified?: boolean
+  /** Doğrulama özeti (ana ajanın gördüğü kısa blok). */
+  verifySummary?: string
 }
 
 export interface SubagentSettings {

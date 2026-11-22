@@ -48,6 +48,7 @@ export type SubagentLogPhase =
   | 'step'
   | 'tool'
   | 'budget'
+  | 'verify'
   | 'synthesis'
   | 'finish'
   | 'error'

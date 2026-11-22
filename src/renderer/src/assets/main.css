@@ -4278,6 +4278,26 @@ kbd {
   color: #fcd34d;
 }
 
+.subagent-verify {
+  flex: 0 0 auto;
+  font-size: 8.5px;
+  border-radius: 4px;
+  padding: 1px 4px;
+  border: 1px solid transparent;
+}
+
+.subagent-verify.verified-ok {
+  color: #6ee7b7;
+  background: #0f2b23;
+  border-color: #1c5c48;
+}
+
+.subagent-verify.verified-fail {
+  color: #fca5a5;
+  background: #2c1414;
+  border-color: #6b2626;
+}
+
 .subagent-cancel {
   margin-top: 6px;
   font-size: 10px;
@@ -5003,6 +5023,18 @@ kbd {
 [data-theme='light'] .git-branch,
 [data-theme='light'] .subagent-agent {
   color: #1e3a8a;
+}
+
+[data-theme='light'] .subagent-verify.verified-ok {
+  color: #065f46;
+  background: #ecfdf5;
+  border-color: #6ee7b7;
+}
+
+[data-theme='light'] .subagent-verify.verified-fail {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fca5a5;
 }
 
 [data-theme='light'] .command-palette,

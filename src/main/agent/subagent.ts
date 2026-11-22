@@ -36,6 +36,18 @@ import {
   prefetchFiles,
   prefetchNote
 } from './prefetch'
+import { buildReviewBrief } from './reviewBrief'
+import {
+  excerpt,
+  formatVerifyVerdict,
+  GATE_CHECK_NAMES,
+  isMutatingTool,
+  runVerifyGate,
+  selfCheckRetryMessage,
+  shouldVerify,
+  verifyRetryMessage,
+  type VerifyVerdict
+} from './verifyGate'
 
 export type SubagentType = 'explore' | 'review' | 'general'
 
@@ -207,6 +219,16 @@ export function applyReportBudget(
 
 /** Bütçenin bu oranı dolunca modele "toparla" hatırlatması gider. */
 const DEADLINE_NUDGE_RATIO = 0.75
+
+/**
+ * Doğrulama kapısının modeli en fazla kaç kez geri gönderebileceği (0.4.24).
+ *
+ * Pratikte 1 tur yeterli: kapı hatayı gösterir, model düzeltir. Üst sınır 2;
+ * ikinci tur, ilk düzeltme eksik kaldığında son şanstır. Daha fazlası,
+ * düzeltmeyen bir modelde yalnızca token yakar (Stroebl et al.: doğrulayıcı
+ * ayırt etmiyorsa N'i artırmak fayda değil maliyet üretir).
+ */
+const MAX_VERIFY_ROUNDS = 2
 
 /**
  * Son tarih yaklaşırken modele gönderilen hatırlatma.
@@ -419,6 +441,15 @@ export interface SubagentResult {
   /** Sonuç eksik: bütçe/süre nedeniyle kesildi. */
   partial?: boolean
   partialReason?: 'steps' | 'tools' | 'deadline' | 'tool-timeout'
+  /**
+   * Yazma yapıldıysa doğrulama kapısının sonucu (0.4.24).
+   * `undefined` = kapı uygulanmadı (yazma yok ya da salt-okunur ajan).
+   * `false` = kapı çalıştı ve geçmedi **veya** ölçülemedi (kontrol tanımsız).
+   * Asla "ölçülmedi ama geçti" demez.
+   */
+  verified?: boolean
+  /** Ana ajana gösterilecek kısa doğrulama özeti. */
+  verify?: { ran: boolean; ok: boolean; summary: string }
 }
 
 export async function runSubagent(options: SubagentOptions): Promise<SubagentResult> {
@@ -445,6 +476,28 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
 
   const skills = await loadEnabledSkills()
   const readOnly = agentType !== 'general' || profile === 'plan'
+
+  /**
+   * `review` ajanı: bu oturumdaki değişikliklerin diff'i hazır bağlam olarak
+   * verilir (0.4.24). Ajan geçmişsiz — kodu yazan konuşmayı görmez — ama
+   * neyi inceleyeceğini keşfetmek için adım harcamaz.
+   */
+  let taskPrompt = prompt
+  if (agentType === 'review' && (history?.length ?? 0) === 0) {
+    const brief = await buildReviewBrief()
+    if (brief.text) {
+      taskPrompt = `${brief.text}\n\n---\n\n${prompt}`
+      logSubagent({
+        phase: 'start',
+        taskId: subagentTaskId,
+        requestId: parentRequestId,
+        agentType,
+        msg: `inceleme paketi hazır: ${brief.files.length} dosya`,
+        data: { files: brief.files, omitted: brief.omitted, briefChars: brief.text.length }
+      })
+    }
+  }
+
   const registry = createTools({
     browser: false,
     computer: false,
@@ -459,7 +512,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
   // Alt ajana da skill kataloğu verilir; gövde yüklemez, yalnızca göreve
   // uygun olanları işaretler. Alt ajan "beceri var" bilgisiyle çalışır ama
   // bağlamı şişirmez.
-  const routedForCatalog = routeSkills(skills, prompt)
+  const routedForCatalog = routeSkills(skills, taskPrompt)
   const skillCatalog = buildSkillCatalog(skills, {
     highlighted: routedForCatalog.map((skill) => skill.id)
   })
@@ -468,7 +521,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
     {
       role: 'system',
       content:
-        agentInstruction(agentType, prompt, workspaceRoot, { readOnly, ownedFiles }) +
+        agentInstruction(agentType, taskPrompt, workspaceRoot, { readOnly, ownedFiles }) +
         skillCatalog.text +
         buildSkillHint(routedForCatalog)
     },
@@ -476,7 +529,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
     // "devam et" isteği sıfırdan bir koşuya dönüşür ve ajan neyi sürdürdüğünü
     // bilemez (opencode'un aynı çocuk oturumuna mesaj eklemesi gibi).
     ...(history ?? []),
-    { role: 'user', content: prompt }
+    { role: 'user', content: taskPrompt }
   ]
 
   /**
@@ -489,7 +542,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
   const prefetched = readOnly
     ? await prefetchFiles({
         root: workspaceRoot,
-        candidates: extractCandidates(prompt, ownedFiles ?? [])
+        candidates: extractCandidates(taskPrompt, ownedFiles ?? [])
       }).catch(() => [])
     : []
   if (prefetched.length > 0) {
@@ -541,7 +594,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       model,
       readOnly,
       ownedFiles: ownedFiles ?? [],
-      promptLength: prompt.length,
+      promptLength: taskPrompt.length,
       workspaceRoot: workspaceRoot ?? null,
       continuation: (history?.length ?? 0) > 0,
       prefetchedFiles: prefetched.map((file) => file.path),
@@ -571,6 +624,62 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
   /** İlerlemesiz adım koruması: ana döngüdeki progressGuard'ın alt ajan sürümü. */
   const stepHistory: StepObservation[] = []
   let nudgesSent = 0
+
+  // ---- Doğrulama kapısı durumu (0.4.24) ----
+  /** Bu koşuda yazılan yollar. Kapı yalnızca yazma olduysa çalışır. */
+  const mutatedPaths = new Set<string>()
+  /** En son yazmanın yapıldığı araç sayacı (modelin kendi `run_checks`'iyle karşılaştırılır). */
+  let lastMutationAt = -1
+  /** Model kendi `run_checks`'ini çalıştırdıysa sonucu: aynı kontrolü iki kez koşmayalım. */
+  let lastSelfCheck: { atToolCall: number; ok: boolean; content: string } | undefined
+  /** Son kapı sonucu — rapora eklenir. */
+  let lastVerify: SubagentResult['verify'] | undefined
+  let verifyRounds = 0
+
+  /**
+   * Kısmi sonuç üretirken dürüstlük notu.
+   *
+   * Bütçe kesintisi doğrulamayı imkânsız kılar; bu "geçti" sayılamaz.
+   * 0.4.16 dersinin devamı: ölçülemeyen şey başarı olarak sunulmaz.
+   */
+  const finalizePartial = async (
+    content: string,
+    reason: NonNullable<SubagentResult['partialReason']>
+  ): Promise<SubagentResult> => {
+    const mutations = await hasMutations().catch(() => 0)
+    const note =
+      mutations > 0
+        ? '\n\nDOĞRULAMA: çalıştırılmadı — koşu bütçe nedeniyle kesildi. ' +
+          'Değişiklikler **doğrulanmadı**; `run_checks` ile doğrula.'
+        : ''
+    return {
+      ok: true,
+      content: content + note,
+      partial: true,
+      partialReason: reason,
+      ...(note ? { verified: false } : {})
+    }
+  }
+
+
+  /**
+   * Bu koşuda çalışma alanı değişti mi?
+   *
+   * `mutatedPaths` yalnızca doğrudan yazma araçlarını görür. `general` ajanı
+   * `run_command` ile de dosya değiştirebilir (ör. `git checkout`, betik).
+   * Değişiklik günlüğü (`changesBefore`) her iki yolu da kapsar; kapıyı
+   * kaçırmamak için iki sinyal birleştirilir.
+   */
+  const hasMutations = async (): Promise<number> => {
+    if (mutatedPaths.size > 0) return mutatedPaths.size
+    if (readOnly || !workspaceRoot) return 0
+    try {
+      const changes = await listWorkspaceChanges(500)
+      return Math.max(0, changes.length - changesBefore)
+    } catch {
+      return 0
+    }
+  }
 
   try {
     for (let step = 0; step < MAX_STEPS; step += 1) {
@@ -634,12 +743,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           msg: 'alt ajan kısmi sonuç döndürdü',
           data: { partialReason: 'deadline', contentLength: synthesized.length }
         })
-        return {
-          ok: true,
-          content: applyReportBudget((synthesized + changedDeadline)).text,
-          partial: true,
-          partialReason: 'deadline'
-        }
+        return await finalizePartial(
+          applyReportBudget(synthesized + changedDeadline).text,
+          'deadline'
+        )
       }
       const body = {
         ...buildBaseBody(request),
@@ -706,12 +813,10 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           msg: 'alt ajan kısmi sonuç döndürdü',
           data: { partialReason: 'deadline', contentLength: base.length }
         })
-        return {
-          ok: true,
-          content: applyReportBudget((base + note + changedTimeout)).text,
-          partial: true,
-          partialReason: 'deadline'
-        }
+        return await finalizePartial(
+          applyReportBudget(base + note + changedTimeout).text,
+          'deadline'
+        )
       }
       if (result.content) finalContent = result.content
       onProgress?.({ step: step + 1, toolCalls: toolCallCount })
@@ -731,6 +836,149 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       })
 
       if (result.toolCalls.length === 0) {
+        // ---- Doğrulama kapısı (0.4.24) ----
+        // Yazma yapıldıysa "bitti" demeden önce kontrolleri **biz** çalıştırırız.
+        // Model "testler geçti" diyebilir; geçtiğini yalnızca araç kanıtlar.
+        const mutationCount = await hasMutations()
+        if (shouldVerify({ readOnly, mutations: mutationCount }) && !controller.signal.aborted) {
+          const reuseSelfCheck =
+            lastSelfCheck !== undefined && lastSelfCheck.atToolCall >= lastMutationAt
+          // Kapı da bütçeden yer kaplar. Son tarihe çok az kaldıysa uzun bir
+          // typecheck/test koşusu başlatmak, koşuyu süre aşımına itmek demek.
+          const budgetLeftMs = deadlineMs() - (Date.now() - startedAt)
+          const MIN_GATE_BUDGET_MS = 20_000
+
+          if (!reuseSelfCheck && budgetLeftMs < MIN_GATE_BUDGET_MS) {
+            lastVerify = {
+              ran: false,
+              ok: false,
+              summary:
+                'DOĞRULAMA: çalıştırılmadı — süre bütçesinde yer kalmadı. ' +
+                'Değişiklikler **doğrulanmadı**; `run_checks` ile doğrula.'
+            }
+            logSubagent({
+              phase: 'verify',
+              level: 'warn',
+              taskId: subagentTaskId,
+              requestId: parentRequestId,
+              agentType,
+              msg: 'doğrulama bütçe yetersizliğinden atlandı',
+              data: { budgetLeftMs, mutations: mutationCount }
+            })
+          } else if (reuseSelfCheck) {
+            // Model zaten yazmadan SONRA `run_checks` çalıştırmış: aynı işi
+            // tekrar koşmak süre kaybı. Onun sonucu kanıt sayılır.
+            const selfOk = lastSelfCheck!.ok
+            lastVerify = {
+              ran: true,
+              ok: selfOk,
+              summary: selfOk
+                ? 'DOĞRULAMA: ✓ geçti — ajanın kendi `run_checks` sonucu'
+                : 'DOĞRULAMA: ✗ **BAŞARISIZ** — ajanın kendi `run_checks` sonucu\n' +
+                  excerpt(lastSelfCheck!.content)
+            }
+            // Kendi kontrolü başarısızsa da düzeltmeye geri gönder: aksi hâlde
+            // ajan "testler geçti" diyemez ama hatayı düzeltme şansı da olmaz.
+            if (
+              !selfOk &&
+              verifyRounds < MAX_VERIFY_ROUNDS &&
+              step + 1 < MAX_STEPS
+            ) {
+              verifyRounds += 1
+              if ((result.content ?? '').trim()) {
+                messages.push({ role: 'assistant', content: result.content })
+              }
+              messages.push({
+                role: 'user',
+                content: selfCheckRetryMessage(lastSelfCheck!.content)
+              })
+              logSubagent({
+                phase: 'verify',
+                level: 'warn',
+                taskId: subagentTaskId,
+                requestId: parentRequestId,
+                agentType,
+                msg: `doğrulama turu ${verifyRounds}/${MAX_VERIFY_ROUNDS} (kendi run_checks) — model düzeltmeye gönderildi`
+              })
+              step -= 1
+              // Sonraki tur yeni bir yazma yapmazsa aynı başarısız kanıt
+              // yeniden kullanılmasın: kanıt "tüketildi" sayılır.
+              lastSelfCheck = undefined
+              continue
+            }
+          } else {
+            try {
+              const verdict: VerifyVerdict = await runVerifyGate(GATE_CHECK_NAMES, {
+                // Bütçenin tamamını kapıya verme: koşunun ve sentezin de payı var.
+                timeoutMs: Math.max(5_000, budgetLeftMs - 10_000)
+              })
+              lastVerify = {
+                ran: verdict.ran,
+                ok: verdict.ok,
+                summary: formatVerifyVerdict(verdict)
+              }
+              logSubagent({
+                phase: 'verify',
+                level: verdict.ok ? 'info' : 'warn',
+                taskId: subagentTaskId,
+                requestId: parentRequestId,
+                agentType,
+                msg: verdict.ran
+                  ? `doğrulama ${verdict.ok ? 'geçti' : 'başarısız'} (${verdict.checks
+                      .map((check) => check.label)
+                      .join(', ')})`
+                  : `doğrulama çalıştırılamadı (${verdict.reason ?? 'bilinmiyor'})`,
+                data: {
+                  ran: verdict.ran,
+                  ok: verdict.ok,
+                  checks: verdict.checks.map((check) => ({
+                    id: check.id,
+                    ok: check.ok,
+                    exitCode: check.exitCode
+                  })),
+                  durationMs: verdict.durationMs,
+                  mutations: [...mutatedPaths].slice(0, 20)
+                }
+              })
+              // Geçmediyse modeli geri gönder: hatayı görsün ve düzeltsin.
+              if (
+                verdict.ran &&
+                !verdict.ok &&
+                verifyRounds < MAX_VERIFY_ROUNDS &&
+                step + 1 < MAX_STEPS
+              ) {
+                verifyRounds += 1
+                // Modelin kendi kapanış metnini de geçmişe koy: aksi hâlde
+                // "neyi düzelteceğim" sorusuna kendi raporunu görmeden yanıt verir.
+                if ((result.content ?? '').trim()) {
+                  messages.push({ role: 'assistant', content: result.content })
+                }
+                messages.push({ role: 'user', content: verifyRetryMessage(verdict) })
+                logSubagent({
+                  phase: 'verify',
+                  level: 'warn',
+                  taskId: subagentTaskId,
+                  requestId: parentRequestId,
+                  agentType,
+                  msg: `doğrulama turu ${verifyRounds}/${MAX_VERIFY_ROUNDS} — model düzeltmeye gönderildi`
+                })
+                // Düzeltme turu adım bütçesinden çalmasın: bu turu geri al.
+                step -= 1
+                continue
+              }
+            } catch (error) {
+              // Kapı çöktüyse "geçti" denmez.
+              lastVerify = {
+                ran: false,
+                ok: false,
+                summary:
+                  'DOĞRULAMA: çalıştırılamadı (' +
+                  (error instanceof Error ? error.message : String(error)) +
+                  '). Değişiklikler **doğrulanmadı**.'
+              }
+            }
+          }
+        }
         const changed = readOnly ? '' : await changedFilesReport(changesBefore)
         logSubagent({
           phase: 'finish',
@@ -743,11 +991,18 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             toolCalls: toolCallCount,
             elapsedMs: Date.now() - startedAt,
             contentLength: finalContent.length,
+            verified: lastVerify?.ok,
+            verifyRan: lastVerify?.ran
           }
         })
+        // Doğrulama bloğu rapor bütçesinden SONRA eklenir: asla kesilmez.
         return {
           ok: true,
-          content: applyReportBudget(((finalContent || 'Alt ajan bir sonuç üretmedi.') + changed)).text
+          content:
+            applyReportBudget(
+              (finalContent || 'Alt ajan bir sonuç üretmedi.') + changed
+            ).text + (lastVerify ? `\n\n${lastVerify.summary}` : ''),
+          ...(lastVerify ? { verified: lastVerify.ok, verify: lastVerify } : {})
         }
       }
 
@@ -810,12 +1065,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
             msg: 'alt ajan kısmi sonuç döndürdü',
             data: { partialReason: 'tools', contentLength: synthesized.length }
           })
-          return {
-            ok: true,
-            content: applyReportBudget(synthesized + changedTools).text,
-            partial: true,
-            partialReason: 'tools'
-          }
+          return await finalizePartial(applyReportBudget(synthesized + changedTools).text, 'tools')
         }
         toolCallCount += 1
         onProgress?.({ step, toolCalls: toolCallCount, lastTool: call.name })
@@ -1060,6 +1310,15 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
               })
             : execution.content
         })
+        // ---- Doğrulama kapısı izleme ----
+        if (isMutatingTool(item.call.name) && execution.ok) {
+          lastMutationAt = toolCallCount
+          const target = typeof item.args['path'] === 'string' ? item.args['path'] : item.call.name
+          mutatedPaths.add(target)
+        }
+        if (item.call.name === 'run_checks') {
+          lastSelfCheck = { atToolCall: toolCallCount, ok: execution.ok, content: execution.content }
+        }
         if (isProductiveRead(item.call.name, execution.ok, execution.content.length)) {
           productiveReadsThisStep += 1
         }
@@ -1113,12 +1372,7 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
       msg: 'alt ajan kısmi sonuç döndürdü',
       data: { partialReason: 'steps', contentLength: synthesized.length }
     })
-    return {
-      ok: true,
-      content: applyReportBudget((synthesized + changedSteps)).text,
-      partial: true,
-      partialReason: 'steps'
-    }
+    return await finalizePartial(applyReportBudget(synthesized + changedSteps).text, 'steps')
   } catch (error) {
     // Beklenmeyen hata: yeniden fırlatmadan önce tanılama kaydı bırak.
     logSubagent({

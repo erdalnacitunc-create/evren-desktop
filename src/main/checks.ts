@@ -58,7 +58,10 @@ export async function detectProjectChecks(): Promise<ProjectCheck[]> {
   return checks
 }
 
-export async function runProjectChecks(names?: string[]): Promise<CheckResult[]> {
+export async function runProjectChecks(
+  names?: string[],
+  options?: { timeoutMs?: number }
+): Promise<CheckResult[]> {
   const checks = await detectProjectChecks()
   const selected =
     names && names.length > 0
@@ -67,9 +70,10 @@ export async function runProjectChecks(names?: string[]): Promise<CheckResult[]>
         )
       : checks
 
+  const timeoutMs = Math.min(180_000, Math.max(5_000, Math.round(options?.timeoutMs ?? 180_000)))
   const results: CheckResult[] = []
   for (const check of selected) {
-    const execution = await runWorkspaceCommand(check.command, 180_000)
+    const execution = await runWorkspaceCommand(check.command, timeoutMs)
     const output = [execution.stdout, execution.stderr]
       .filter((part) => part.trim())
       .join('\n')

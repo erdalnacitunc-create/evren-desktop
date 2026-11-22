@@ -26,6 +26,19 @@ function taskStatusLabel(status: SubagentTaskInfo['status']): string {
   return 'çalışıyor'
 }
 
+/**
+ * Doğrulama rozeti (0.4.24).
+ *
+ * "tamam" tek başına yanıltıcı: ajan bitmiş olabilir ama typecheck/test
+ * geçmemiş olabilir. Kullanıcı bu ayrımı görmeli — bu yüzden ayrı rozet.
+ */
+function verifyLabel(task: SubagentTaskInfo): { text: string; tone: string } | null {
+  if (task.status !== 'done' || task.verified === undefined) return null
+  return task.verified
+    ? { text: 'doğrulandı', tone: 'verified-ok' }
+    : { text: 'doğrulanmadı', tone: 'verified-fail' }
+}
+
 export function TasksPanel({
   todos,
   subagentTasks,
@@ -84,41 +97,52 @@ export function TasksPanel({
             {subagentTasks.length > 0 && (
               <div className="subagent-task-list">
                 <div className="tasks-section-title">Arka plan alt-ajanları</div>
-                {subagentTasks.map((task) => (
-                  <details
-                    key={task.id}
-                    className={`subagent-task subagent-${task.status}`}
-                  >
-                    <summary>
-                      <span className="subagent-agent">{task.agentType}</span>
-                      <span className="subagent-prompt" title={task.prompt}>
-                        {task.prompt}
-                      </span>
-                      <span className={`subagent-status subagent-status-${task.status}`}>
-                        {taskStatusLabel(task.status)}
-                      </span>
-                    </summary>
-                    {task.status === 'running' && (
-                      <button
-                        className="btn-ghost danger subagent-cancel"
-                        onClick={() => onCancelSubagent(task.id)}
-                      >
-                        Durdur
-                      </button>
-                    )}
-                    {task.status !== 'running' && task.status !== 'done' && (
-                      <button
-                        className="btn-ghost subagent-cancel"
-                        onClick={() => onRetrySubagent(task.id)}
-                        title="Görevi yeniden çalıştır"
-                      >
-                        Yeniden dene{task.attempts ? ` (${task.attempts})` : ''}
-                      </button>
-                    )}
-                    {task.result && <pre className="subagent-result">{task.result}</pre>}
-                    {task.error && <p className="error subagent-error">{task.error}</p>}
-                  </details>
-                ))}
+                {subagentTasks.map((task) => {
+                  const verify = verifyLabel(task)
+                  return (
+                    <details
+                      key={task.id}
+                      className={`subagent-task subagent-${task.status}`}
+                    >
+                      <summary>
+                        <span className="subagent-agent">{task.agentType}</span>
+                        <span className="subagent-prompt" title={task.prompt}>
+                          {task.prompt}
+                        </span>
+                        {verify && (
+                          <span
+                            className={`subagent-verify ${verify.tone}`}
+                            title={task.verifySummary ?? verify.text}
+                          >
+                            {verify.text}
+                          </span>
+                        )}
+                        <span className={`subagent-status subagent-status-${task.status}`}>
+                          {taskStatusLabel(task.status)}
+                        </span>
+                      </summary>
+                      {task.status === 'running' && (
+                        <button
+                          className="btn-ghost danger subagent-cancel"
+                          onClick={() => onCancelSubagent(task.id)}
+                        >
+                          Durdur
+                        </button>
+                      )}
+                      {task.status !== 'running' && task.status !== 'done' && (
+                        <button
+                          className="btn-ghost subagent-cancel"
+                          onClick={() => onRetrySubagent(task.id)}
+                          title="Görevi yeniden çalıştır"
+                        >
+                          Yeniden dene{task.attempts ? ` (${task.attempts})` : ''}
+                        </button>
+                      )}
+                      {task.result && <pre className="subagent-result">{task.result}</pre>}
+                      {task.error && <p className="error subagent-error">{task.error}</p>}
+                    </details>
+                  )
+                })}
               </div>
             )}
 

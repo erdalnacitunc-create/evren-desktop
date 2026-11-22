@@ -61,3 +61,29 @@ Ana ajan yalnızca alt-ajanın **özet sonucunu** görür; böylece uzun dosya/a
 - Otomatik sürdürmede onay gerektiren araç çağrıları otomatik kabul edilir; açık
   engelle politikası hâlâ geçerlidir.
 - Görevlerin modeli ve çalışma alanı kayıtla birlikte saklanır.
+
+## Doğrulama kapısı (0.4.24)
+
+- `general` ajanı **dosya yazdıysa**, bitirmeden önce `typecheck` + `test`
+  otomatik çalışır. Sonuç sonuca eklenir: `DOĞRULAMA: ✓ geçti` /
+  `✗ BAŞARISIZ` / `doğrulanmadı`.
+- Kapı geçmezse model en fazla **2 tur** düzeltmeye geri gönderilir; düzeltme
+  istemi testi/kontrolü silmeyi veya gevşetmeyi açıkça yasaklar.
+- Ajan yazmadan **sonra** kendi `run_checks`'ini çalıştırdıysa onun sonucu
+  kanıt sayılır; aynı kontrol iki kez koşmaz.
+- Ölçülemediğinde "geçti" denmez: kontrol tanımsız, kapı çöktü veya bütçe
+  kesildi ise sonuç **doğrulanmadı** olarak işaretlenir.
+- `EVREN_VERIFY_GATE=off` ile kapatılır; `EVREN_VERIFY_TIMEOUT_MS` üst sınırı
+  belirler (varsayılan 180 sn).
+- Ana ajan sonucu `[DOĞRULAMA ✓]`, `[DOĞRULAMA BAŞARISIZ]` veya
+  `[DOĞRULAMA YOK — doğrulanmadı]` etiketinden görür.
+
+## İnceleme paketi (0.4.24)
+
+- `review` ajanı bu oturumda yapılan değişikliklerin yol listesi ve diff'ini
+  **hazır bağlam** olarak alır (~12 KB; sığmayan dosyalar bildirilir).
+- Ajan kodu yazan konuşmayı görmez (taze bakış) ama neyi inceleyeceğini
+  keşfetmek için adım harcamaz.
+- Değişiklik yoksa brief eklenmez; ajan normal görevini yapar.
+
+Ayrıntı: `docs/VERIFICATION-GATE.md`.

@@ -42,6 +42,7 @@ import {
   type SearchProvider
 } from './websearch'
 import { waitForQuestion } from './question'
+import { isMutatingTool as isMutatingToolName } from './verifyGate'
 import { captureScreen, runComputerCommand, toSendKeys } from './computer'
 import {
   deleteWorkspaceFile,
@@ -711,7 +712,9 @@ export function createTools(options: {
       category: 'read',
       description:
         'Ayrı bağlamda çalışan bir alt ajan başlatır. agent: explore (salt-okunur keşif), ' +
-        'review (salt-okunur kod incelemesi), general (çalışma alanı araçlarıyla görev). ' +
+        'review (salt-okunur kod incelemesi; bu oturumdaki değişikliklerin diff\'i otomatik ' +
+        'eklenir), general (çalışma alanı araçlarıyla görev; bitirince typecheck/test ' +
+        'otomatik çalışır). ' +
         'background=true ise hemen görev kimliği döner; sonucu task_wait/task_status ile al. ' +
         'Alt ajan yalnızca kısa bir sonuç döndürür. ' +
         'YAZMA yapacak ajana (general) `files` ver: o ajan yalnızca o yollara yazabilir, ' +
@@ -1554,7 +1557,13 @@ export function createTools(options: {
         'task_list'
       ])
       const allowed = new Set(
-        tools.map((item) => item.name).filter((name) => !excluded.has(name))
+        tools
+          .map((item) => item.name)
+          .filter((name) => !excluded.has(name))
+          // Salt-okunur oturumda Code Mode yazma araçlarını **çağıramaz**.
+          // Üst düzey araç kapısı yeterli değildi: `execute` içinden
+          // `tools.write_file(...)` çağrılabiliyordu (0.4.24'te kapatıldı).
+          .filter((name) => !(options.readOnly && isMutatingToolName(name)))
       )
       const logs: string[] = []
       const api = Object.fromEntries(
@@ -2631,12 +2640,18 @@ export function createTools(options: {
   const readOnlyBlocked = new Set([
     'write_file',
     'edit_file',
+    'patch',
     'delete_file',
     'create_directory',
     'run_command',
     'run_checks',
     'run_python',
     'git',
+    // Code Mode: içinden `write_file`/`run_command` çağırabildiği için
+    // salt-okunur ajana verilmemeli. 0.4.24 öncesinde `explore`/`review`
+    // ajanları `execute` ve `patch` üzerinden yazabiliyordu; araç listesi
+    // kapısı bunu görünürde kapatıyordu ama açık kalıyordu.
+    'execute',
     'browser_click',
     'browser_type',
     'browser_key'

@@ -1,8 +1,8 @@
-version: 0.4.25
+version: 0.4.26
 files:
-  - url: EVREN-Desktop-Setup-0.4.25-x64.exe
-    sha512: ISoyVJ8MgimdUPrUi5jq6rr6NvBejFQVB2Jv5ZZbzilnsnjps5WNA/lNntvArjNhYLzWJDwkOqSIAGpsUh4Txw==
-    size: 183100165
-path: EVREN-Desktop-Setup-0.4.25-x64.exe
-sha512: ISoyVJ8MgimdUPrUi5jq6rr6NvBejFQVB2Jv5ZZbzilnsnjps5WNA/lNntvArjNhYLzWJDwkOqSIAGpsUh4Txw==
-releaseDate: '2026-11-22T16:04:25.320Z'
+  - url: EVREN-Desktop-Setup-0.4.26-x64.exe
+    sha512: TZ+FQmiYJEJqfq8wayDried+YZTWxxGhu7TZYbNt1eSo6OD6ieM+59XsaXV3Dyyr4FrOfnpJihy2ssoREguaoQ==
+    size: 183100651
+path: EVREN-Desktop-Setup-0.4.26-x64.exe
+sha512: TZ+FQmiYJEJqfq8wayDried+YZTWxxGhu7TZYbNt1eSo6OD6ieM+59XsaXV3Dyyr4FrOfnpJihy2ssoREguaoQ==
+releaseDate: '2026-11-22T19:34:30.722Z'

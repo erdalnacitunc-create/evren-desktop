@@ -157,6 +157,33 @@ export class ModelGate {
 export const modelGate = new ModelGate(modelConcurrencyFromEnv())
 
 /**
+ * İptal edilen isteğin slotunu hemen geri verme (0.4.25).
+ *
+ * ## Neden
+ *
+ * Yük sınamasında ölçüldü: 3 istek aynı anda iptal edilince, istemci tarafında
+ * `fetch` **anında** reddediliyor ve slot serbest kalıyor; ama sağlayıcı
+ * tarafında soketin kapanması birkaç milisaniye gecikiyor. O aralıkta kapı yeni
+ * istek açıyor ve sağlayıcı **kısa süreliğine sınırın üstünde** istek görüyor
+ * (ölçülen: 4 canlı, sınır 2 — süre <20 ms).
+ *
+ * Gerçek sağlayıcılar da iptal edilen isteği hemen düşürmez: istek ya
+ * tamamlanır ya da sunucu kapanışı fark eder. Bu yüzden slotu **grace**
+ * süresi kadar tutmak, kapıyı sağlayıcının gerçek davranışına hizalar.
+ *
+ * ## Maliyet
+ *
+ * İptal sonrası en fazla `EVREN_ABORT_GRACE_MS` (varsayılan 250 ms) kapasite
+ * eksik kalır. İptal nadir olduğu için pratikte görünmez; karşılığında 429
+ * fırtınası riski kalkar.
+ */
+export function abortGraceMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env['EVREN_ABORT_GRACE_MS'])
+  if (!Number.isFinite(raw) || raw < 0) return 250
+  return Math.min(5_000, Math.round(raw))
+}
+
+/**
  * Bir model isteğini kapıdan geçirir.
  *
  * Kullanım: yalnızca **istek** sarmalanır, araç yürütmesi sarmalanmaz.
@@ -167,9 +194,21 @@ export async function withModelSlot<T>(
   signal?: AbortSignal
 ): Promise<T> {
   const release = await modelGate.acquire(priority, signal)
+  let aborted = false
   try {
     return await run()
+  } catch (error) {
+    if (signal?.aborted) aborted = true
+    throw error
   } finally {
-    release()
+    if (aborted) {
+      // Sağlayıcı tarafında soket hâlâ kapanıyor olabilir; slotu hemen
+      // yeniden kullanma (yukarıdaki gerekçe).
+      const delay = abortGraceMs()
+      if (delay > 0) setTimeout(release, delay).unref?.()
+      else release()
+    } else {
+      release()
+    }
   }
 }

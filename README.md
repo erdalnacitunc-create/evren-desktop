@@ -188,6 +188,26 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.26 Beta — yük/kaos sınaması
+
+0.4.25 kapısı yük altında sınandı (Chaos Engineering + k6 stress/soak sırası).
+Ölçüm **sistemin dışında** yapıldı: eşzamanlılık kapının sayacıyla değil HTTP
+sunucusunda sayıldı. 7 senaryo: smoke, ortalama, stress (5×), öncelik, kaos
+(iptal), soak (30 koşu), arıza (429).
+
+| Bulgu | Düzeltme |
+|---|---|
+| İptal edilen isteğin slotu erken bırakılıyordu | `EVREN_ABORT_GRACE_MS` (250 ms) |
+| Ölçüm aracı iptal edilen soketi canlı saydı | Ana ölçüt **yaşayan** bağlantı |
+| Her yoklamada olaylar yeniden sayıldı (801 → gerçek 2) | Sayaç sıfırlama + günlükten sayım |
+
+Düzeltme öncesi 3/3 tekrar düştü, sonrası **5/5 geçti**.
+Kurulu uygulamada canlı sınama (CDP, sınır=1): 296 sn, retry=0, 429=0,
+2 alt ajan **tam sırayla** koştu (bindirme=1).
+
+**87 paket · 2081 kontrol**. Ayrıntı: `docs/RELEASE-0.4.26.md`,
+`docs/STRESS-VERIFICATION.md`.
+
 # 0.4.25 Beta — eşzamanlılık kapısı + dış okuma kökleri
 
 0.4.24 canlı koşusu 10 dk 42 sn sonra **tamamen düştü**: sağlayıcı "en fazla 2

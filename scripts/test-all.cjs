@@ -81,6 +81,7 @@ const SUITES = [
   { file: 'scripts/update-button-test.ts', label: 'Güncelleme düğmesi durumları', fast: true },
   { file: 'scripts/model-gate-test.ts', label: 'Model istek kapısı (eşzamanlılık)', fast: true },
   { file: 'scripts/model-concurrency-e2e-test.ts', label: 'Model kapısı uçtan uca' },
+  { file: 'scripts/model-gate-stress-test.ts', label: 'Model kapısı yük/kaos sınaması' },
   { file: 'scripts/model-concurrency-live-test.ts', label: 'Model kapısı (gerçek model)' },
   { file: 'scripts/read-roots-test.ts', label: 'Okuma kökü çıkarımı', fast: true },
   { file: 'scripts/read-roots-e2e-test.ts', label: 'Okuma kökleri (gerçek dosya)' },

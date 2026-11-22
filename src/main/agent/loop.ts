@@ -8,8 +8,12 @@ import { getAgentMcpTools } from '../mcp/manager'
 import { getAgentPluginTools } from '../plugins/manager'
 import { sessions } from '../sessionRepository'
 import { streamCompletion } from '../sse'
+import { withModelSlot } from './modelGate'
+import { deriveReadRoots } from './readRoots'
+import { isAiError } from '../ai/error'
+import { statSync } from 'fs'
 import { getSettings } from '../settings'
-import { getWorkspaceRoot } from '../workspace'
+import { getWorkspaceRoot, runWithReadRoots } from '../workspace'
 import { ensureAgentWorkspace } from '../workspace'
 import { resolvePermission, permissionResource, toolCategory } from '../../shared/permissions'
 import { approvalKey, waitForApproval } from './approval'
@@ -151,6 +155,21 @@ export function outsideWorkspaceHint(
       userText
     )
   if (!mentionsPath) return ''
+  // 0.4.25: kullanıcının mesajında geçen yollar **salt-okunur** açıldı
+  // (`readRootsForMessages`). Bu yüzden önce read araçları, sonra run_command
+  // önerilir; yazma hâlâ yalnızca çalışma alanında.
+  const roots = readRootsForMessages([{ role: 'user', content: userText }])
+  if (roots.length > 0) {
+    return (
+      '\n\nÇALIŞMA ALANI DIŞI: Kullanıcı çalışma alanı dışında bir yol söyledi. ' +
+      'Şu kökler bu istek için **salt-okunur** açıldı:\n' +
+      roots.map((root) => `- ${root}`).join('\n') +
+      '\nBu köklerde `read_file`/`list_files`/`glob`/`grep` **mutlak yolla çalışır**; ' +
+      'alt ajanlar da aynı kökleri okuyabilir. **Yazma** hâlâ yalnızca çalışma alanında. ' +
+      'Kök dışında bir yol gerekirse run_command + mutlak yol kullan. ' +
+      'Kullanıcı bu klasörü çalışma alanı yapmak isterse "Klasör Seç" ile seçebilir.'
+    )
+  }
   return (
     '\n\nÇALIŞMA ALANI DIŞI: Kullanıcı çalışma alanı dışında bir yol söyledi. ' +
     'read_file, list_files, glob, grep ve write_file yalnızca çalışma alanı içinde çalışır ' +
@@ -289,7 +308,61 @@ function approvalPreview(name: string, args: Record<string, unknown>): Record<st
   return copy
 }
 
+/**
+ * Kullanıcı mesajındaki mutlak yolları **salt-okunur** kök olarak açar (0.4.25).
+ *
+ * Neden: 0.4.24 canlı koşusunda oturumun çalışma alanı boş bir geçici dizindi,
+ * sorgu ise masaüstündeki projeyi hedefliyordu. Ana ajan `run_command` ile
+ * okuyabildi; `explore` alt ajanları **hiçbir şey okuyamadı** ve iki ajan
+ * 6 dakika boyunca başarısız araç denemesiyle adım yaktı.
+ *
+ * Kapsam dar tutulur: yalnızca mesajda açıkça yazılan, **var olan** yollar
+ * (en fazla 5) ve yalnızca okuma. Model kendi kökünü ekleyemez.
+ */
+function readRootsForMessages(messages: Array<{ role: string; content: unknown }>): string[] {
+  const text = lastUserTextOf(messages)
+  if (!text) return []
+  try {
+    return deriveReadRoots(text, (candidate) => {
+      try {
+        const stat = statSync(candidate)
+        return stat.isDirectory() ? 'dir' : stat.isFile() ? 'file' : null
+      } catch {
+        return null
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Sağlayıcı doygunluğunda kullanıcıya yazılan mesaj (0.4.25).
+ *
+ * Amaç suçlamak değil, **ne olacağını** söylemek: hangi sınır, ne yapmalı,
+ * eldeki iş korunuyor mu.
+ */
+export function providerBusyNote(reason: string): string {
+  return (
+    '\n\n---\n\n**Sağlayıcı şu an dolu.** ' +
+    `Sunucu: ${reason}\n\n` +
+    'Yukarıdaki çalışma korunuyor; yeniden göndermek zorunda değilsin.\n\n' +
+    'Ne yapabilirsin:\n' +
+    '- **Devam et** yazınca kaldığı yerden sürer (geçmiş korunur).\n' +
+    '- Aynı anda çalışan alt ajan sayısını azalt (sağlayıcı hesabı bu modelde ' +
+    'eşzamanlı istek sınırı koyuyor).\n' +
+    '- Birkaç dakika sonra tekrar dene; sınır genelde kısa sürelidir.'
+  )
+}
+
 export async function runAgent(options: AgentRunOptions): Promise<void> {
+  // Okuma kökleri tüm istek boyunca geçerli olsun: ana ajan ve ondan doğan
+  // alt ajanlar aynı AsyncLocalStorage kapsamında çalışır.
+  const roots = readRootsForMessages(options.payload?.messages ?? [])
+  return runWithReadRoots(roots, () => runAgentInternal(options))
+}
+
+async function runAgentInternal(options: AgentRunOptions): Promise<void> {
   const { requestId, baseUrl, apiKey, payload, controller, webContentsId } = options
   // Taşıyıcıdan bağımsız iç `send`: tüm olay çağrıları sink üzerinden çıkar.
   const sink = createSafeSink(createRequestSink(options.sink, requestId))
@@ -1196,12 +1269,17 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
           ? { tools: finalTools, tool_choice: 'none' as const }
           : {})
       })
-      const result = await streamCompletion(
-        baseUrl,
-        apiKey,
-        body,
-        controller.signal,
-        (delta) => send({ requestId, type: delta.kind, text: delta.text })
+      const result = await withModelSlot(
+        'main',
+        () =>
+          streamCompletion(
+            baseUrl,
+            apiKey,
+            body,
+            controller.signal,
+            (delta) => send({ requestId, type: delta.kind, text: delta.text })
+          ),
+        controller.signal
       )
       if (result.usage) send({ requestId, type: 'usage', usage: result.usage })
 
@@ -1313,36 +1391,41 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
         signal: controller.signal,
         onDelta: (kind, text) => send({ requestId, type: kind, text }),
         run: (messagesToSend) =>
-          streamCompletion(
-            baseUrl,
-            apiKey,
-            { ...body, messages: messagesToSend },
-            controller.signal,
-            (delta) => send({ requestId, type: delta.kind, text: delta.text }),
-            {
-              onRetry: (info) => {
-                // Kalıcı retry durumu (OpenCode Session.Message.Assistant.Retry).
-                void persistRetry({
-                  attempt: info.attempt,
-                  at: Date.now() + info.delayMs,
-                  error: {
-                    type: 'Retryable',
-                    message: info.reason,
-                    ...(info.retryAfterMs !== undefined
-                      ? { retryAfterMs: info.retryAfterMs }
-                      : {})
+          withModelSlot(
+            'main',
+            () =>
+              streamCompletion(
+                baseUrl,
+                apiKey,
+                { ...body, messages: messagesToSend },
+                controller.signal,
+                (delta) => send({ requestId, type: delta.kind, text: delta.text }),
+                {
+                  onRetry: (info) => {
+                    // Kalıcı retry durumu (OpenCode Session.Message.Assistant.Retry).
+                    void persistRetry({
+                      attempt: info.attempt,
+                      at: Date.now() + info.delayMs,
+                      error: {
+                        type: 'Retryable',
+                        message: info.reason,
+                        ...(info.retryAfterMs !== undefined
+                          ? { retryAfterMs: info.retryAfterMs }
+                          : {})
+                      }
+                    })
+                    send({
+                      requestId,
+                      type: 'retry',
+                      attempt: info.attempt,
+                      maxAttempts: info.maxAttempts,
+                      delayMs: info.delayMs,
+                      reason: info.reason
+                    })
                   }
-                })
-                send({
-                  requestId,
-                  type: 'retry',
-                  attempt: info.attempt,
-                  maxAttempts: info.maxAttempts,
-                  delayMs: info.delayMs,
-                  reason: info.reason
-                })
-              }
-            }
+                }
+              ),
+            controller.signal
           ),
         onContinue: (event) => {
           void persistRetry(null)
@@ -1645,6 +1728,20 @@ export async function runAgent(options: AgentRunOptions): Promise<void> {
     // ele alınıyor (OpenCode ile aynı).
     await finalizeRun('tool-limit')
   } catch (error) {
+    // Sağlayıcı doygunluğu (eşzamanlı istek sınırı / model dolu) bir kod hatası
+    // değil, **kapasite** durumudur. 0.4.24 canlı koşusunda bu yüzden tur
+    // tamamen düştü ve kullanıcı 10 dakika sonra yalnızca hata gördü.
+    // Artık: eldeki içerik korunur, nedeni ve çözümü söyleyen net bir mesaj
+    // yazılır ve tur normal biçimde kapanır.
+    if (
+      isAiError(error) &&
+      (error.reason.tag === 'RateLimit' || error.reason.tag === 'ProviderInternal')
+    ) {
+      log.warn(`Sağlayıcı doygun: ${error.reason.message}`)
+      send({ requestId, type: 'content', text: providerBusyNote(error.reason.message) })
+      send({ requestId, type: 'done', finishReason: 'provider-busy' })
+      return
+    }
     send(toErrorEvent(requestId, error, controller))
   } finally {
     await registry.dispose()

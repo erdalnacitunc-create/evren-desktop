@@ -32,6 +32,41 @@ async function waitForFile(path: string, timeoutMs: number): Promise<boolean> {
   return false
 }
 
+/**
+ * Dosyayı **beklenen içerikle** bekler (0.4.25).
+ *
+ * ## Neden
+ *
+ * Tam pakette yarış ortaya çıktı: `waitForFile` yalnızca dosyanın **varlığına**
+ * bakıyordu. Shell dosyayı oluşturup yönlendirme tamponunu henüz boşaltmadan
+ * test içeriği okuyordu; sonuç "dosya oluştu ✓, içerik boş ✗" oluyordu.
+ *
+ * Bu bir ürün hatası değil, **testin kendi yarışıydı** — ama tam olarak
+ * kapatmaya çalıştığımız sınıf: ölçüm aracı ölçtüğünü sandığı şeyi ölçmüyor.
+ * Artık içerik gelene kadar beklenir; gelmezse test açıkça başarısız olur.
+ */
+async function waitForContent(
+  path: string,
+  expected: string,
+  timeoutMs: number
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const raw = readFileSync(path)
+      const isUtf16 = raw.includes(0)
+      const text = (isUtf16 ? raw.toString('utf16le') : raw.toString('utf8'))
+        .replace(/^\uFEFF/, '')
+        .trim()
+      if (text.includes(expected)) return text
+    } catch {
+      // henüz yok / okunamıyor
+    }
+    await sleep(100)
+  }
+  return ''
+}
+
 app.whenReady().then(async () => {
   const cwd = process.cwd()
   const marker = join(cwd, 'node_modules', '.cache', `pty-marker-${process.pid}.txt`)
@@ -56,12 +91,8 @@ app.whenReady().then(async () => {
 
   const created = await waitForFile(marker, 8000)
   check('komut gerçekten çalıştı (dosya oluştu)', created, true)
-  // Windows PowerShell `>` yönlendirmesi UTF-16LE yazar; iki kodlamayı da kabul et.
-  const raw = created ? readFileSync(marker) : Buffer.alloc(0)
-  const isUtf16 = raw.includes(0)
-  const text = (isUtf16 ? raw.toString('utf16le') : raw.toString('utf8'))
-    .replace(/^\uFEFF/, '')
-    .trim()
+  // İçerik, yönlendirme tamponu boşalana kadar boş olabilir; bekle.
+  const text = created ? await waitForContent(marker, 'PTY_MARKER', 5000) : ''
   check('dosya içeriği doğru', text, 'PTY_MARKER')
 
 

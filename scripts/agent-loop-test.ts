@@ -337,11 +337,24 @@ app.whenReady().then(async () => {
     )
     server.close()
 
-    check('hata olayı', sink.countOf('error'), 1)
-    const errorEvent = sink.events.find((e) => e.type === 'error') as { error: string; status?: number }
-    check('hata mesajı taşınır', errorEvent.error.includes('kota'), true)
-    check('durum kodu taşınır', errorEvent.status, 429)
-    check('hatadan sonra done yok', sink.countOf('done'), 0)
+    // 0.4.25: sağlayıcı doygunluğu (429 / model dolu) artık **kapasite**
+    // durumu olarak ele alınır. Tur düşmez: kullanıcı eldeki işi korur, nedeni
+    // ve çözümü görür, sonra "devam et" diyebilir. Önceden yalnızca hata
+    // olayı gidiyordu ve 10 dakikalık çalışma kayboluyordu.
+    check('hata olayı yok (doygunluk yumuşak kapanır)', sink.countOf('error'), 0)
+    check('done bir kez', sink.countOf('done'), 1)
+    check(
+      'done nedeni provider-busy',
+      (sink.events.find((e) => e.type === 'done') as { finishReason: string }).finishReason,
+      'provider-busy'
+    )
+    const notice = sink.events
+      .filter((e) => e.type === 'content')
+      .map((e) => (e as { text: string }).text)
+      .join('')
+    check('kullanıcıya neden söylenir', notice.includes('dolu'), true)
+    check('sağlayıcı mesajı taşınır', notice.includes('kota'), true)
+    check('çözüm önerilir', notice.includes('Devam et'), true)
   }
 
   console.log(`TOTAL=28 FAILED=${failed}`)

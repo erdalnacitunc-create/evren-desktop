@@ -37,6 +37,8 @@ import {
   prefetchNote
 } from './prefetch'
 import { buildReviewBrief } from './reviewBrief'
+import { currentReadRoots } from '../workspace'
+import { withModelSlot } from './modelGate'
 import {
   excerpt,
   formatVerifyVerdict,
@@ -353,12 +355,17 @@ async function finalizeSubagent(input: {
   }
 
   try {
-    const result = await streamCompletion(
-      input.baseUrl,
-      input.apiKey,
-      body,
-      input.controller.signal,
-      () => undefined
+    const result = await withModelSlot(
+      'sub',
+      () =>
+        streamCompletion(
+          input.baseUrl,
+          input.apiKey,
+          body,
+          input.controller.signal,
+          () => undefined
+        ),
+      input.controller.signal
     )
     const text = (result.content ?? '').trim()
     if (text) return text
@@ -415,13 +422,28 @@ function agentInstruction(
         'araç reddeder. Diğer dosyaları **okuyabilirsin** (kısıt yok).'
       : ''
 
+  /**
+   * Çalışma alanı dışı davranışı (0.4.25).
+   *
+   * 0.4.24 canlı koşusunda bu not **yanlıştı**: salt-okunur ajana "run_command
+   * kullan" diyordu, o araç ise salt-okunur ajanda hiç yok. İki `explore` ajanı
+   * 6 dakika boyunca olmayan aracı aradı. Artık tarif, ajanın **gerçekten sahip
+   * olduğu** yeteneğe göre yazılır.
+   */
+  const readRoots = currentReadRoots()
   const outsideNote =
     workspaceRoot && /\b[A-Za-z]:\\/.test(prompt)
-      ? '\n\nÇALIŞMA ALANI DIŞI: Görevdeki mutlak yollar çalışma alanının dışında olabilir. ' +
-        'read_file/list_files/glob/grep yalnızca çalışma alanı içinde çalışır. ' +
-        'Dışarıdaki dosyalar için **run_command** kullan ve **mutlak yol** ver ' +
-        '(ör. Get-Content "C:\\proje\\dosya.md" -Encoding UTF8). ' +
-        'read_file denemeyin.'
+      ? readRoots.length > 0
+        ? '\n\nÇALIŞMA ALANI DIŞI: Görevdeki mutlak yollar çalışma alanının dışında. ' +
+          'Şu kökler **salt-okunur** açık; `read_file`/`list_files`/`glob`/`grep` ile ' +
+          'mutlak yol vererek okuyabilirsin:\n' +
+          readRoots.map((root) => `- ${root}`).join('\n') +
+          '\nBu köklerin dışına çıkma; yazma yapamazsın.'
+        : '\n\nÇALIŞMA ALANI DIŞI: Görevdeki mutlak yollar çalışma alanının dışında ve ' +
+          'bu koşuda dış okuma izni **yok**. `read_file`/`glob`/`grep` reddeder; ' +
+          '`run_command` bu ajan türünde tanımlı değildir. Bu yüzden araç denemeleriyle ' +
+          'adım harcama: hemen "doğrulanamadı — çalışma alanı dışı erişim yok" diye ' +
+          'kısa bir sonuç döndür ve ana ajana dosyaların okunamadığını bildir.'
       : ''
   const efficiency =
     '\n\nVERİMLİLİK:' +
@@ -768,13 +790,18 @@ export async function runSubagent(options: SubagentOptions): Promise<SubagentRes
           signal: controller.signal,
           onDelta: () => undefined,
           run: (messagesToSend) =>
-            streamCompletion(
-              baseUrl,
-              apiKey,
-              { ...body, messages: messagesToSend },
-              controller.signal,
-              () => undefined,
-              { totalTimeoutMs: Math.max(5_000, deadlineMs() - (Date.now() - startedAt)) }
+            withModelSlot(
+              'sub',
+              () =>
+                streamCompletion(
+                  baseUrl,
+                  apiKey,
+                  { ...body, messages: messagesToSend },
+                  controller.signal,
+                  () => undefined,
+                  { totalTimeoutMs: Math.max(5_000, deadlineMs() - (Date.now() - startedAt)) }
+                ),
+              controller.signal
             )
         })
       } catch (caught) {

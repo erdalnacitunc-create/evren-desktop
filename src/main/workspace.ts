@@ -129,6 +129,102 @@ export function setWorkspaceRootOverride(root: string | null | undefined): void 
   workspaceRootOverride = root
 }
 
+/**
+ * Salt-okunur **ek kökler** (0.4.25).
+ *
+ * Çalışma alanı dışındaki bir klasörü yalnızca **okumak** için kullanılır.
+ * Kökler kullanıcının mesajında açıkça geçen yollardan üretilir
+ * (`agent/readRoots.ts`); model kendi kökünü ekleyemez. Yazma yolları
+ * (`resolveInside`) bu kapsamdan **etkilenmez**.
+ */
+const readRootsScope = new AsyncLocalStorage<string[]>()
+
+export function runWithReadRoots<T>(roots: string[], fn: () => T): T {
+  const normalized = roots
+    .map((root) => resolve(root))
+    .filter((root, index, all) => all.indexOf(root) === index)
+  return readRootsScope.run(normalized, fn)
+}
+
+export function currentReadRoots(): string[] {
+  return readRootsScope.getStore() ?? []
+}
+
+function isInsideRoot(root: string, target: string): boolean {
+  const check = relative(root, target)
+  return check === '' || (!check.startsWith('..') && !isAbsolute(check))
+}
+
+async function realPathOfNearest(target: string): Promise<string> {
+  let probe = target
+  while (!existsSync(probe)) {
+    const parent = dirname(probe)
+    if (parent === probe) break
+    probe = parent
+  }
+  try {
+    return await fs.realpath(probe)
+  } catch {
+    return probe
+  }
+}
+
+export interface ReadTarget {
+  /** Eşleşen kök (çalışma alanı ya da ek okuma kökü). */
+  root: string
+  abs: string
+  /** Sonuçta gösterilecek etiket (çalışma alanı içinde göreli). */
+  label: string
+  /** Çalışma alanının dışında mı? */
+  outside: boolean
+}
+
+/**
+ * Okuma için yolu çözer: çalışma alanı **veya** ek okuma kökleri.
+ *
+ * Çalışma alanı dışına çıkan **yazma** yolları hâlâ `resolveInside` ile
+ * engellenir; burada yalnızca okuma kapsamı genişler.
+ */
+export async function resolveReadTarget(rawInput?: string): Promise<ReadTarget> {
+  const workspace = await getWorkspaceRoot()
+  const extras = currentReadRoots()
+  const allowed = [workspace, ...extras].filter((root): root is string => Boolean(root))
+  const input = String(rawInput ?? '').trim()
+
+  if (!input) {
+    if (!workspace) {
+      throw new Error('Çalışma alanı seçilmedi. Üst araç çubuğundan bir klasör seçin.')
+    }
+    return { root: workspace, abs: workspace, label: '.', outside: false }
+  }
+
+  if (isAbsolute(input)) {
+    const abs = resolve(input)
+    const match = allowed.find((root) => isInsideRoot(root, abs))
+    if (!match) {
+      throw new Error(
+        'Bu yol izinli okuma köklerinde değil: ' +
+          `${abs}. Yalnızca çalışma alanı ve kullanıcının mesajında verdiği yollar ` +
+          'okunabilir. Çalışma alanı dışındaki dosyalar için run_command + mutlak yol ' +
+          'kullan (ör. Get-Content "C:\\proje\\dosya.md").'
+      )
+    }
+    // Symlink hedefi kökün dışına çıkıyorsa reddet.
+    const real = await realPathOfNearest(abs)
+    if (!isInsideRoot(match, real)) {
+      throw new Error('Symlink hedefi izinli okuma kökünün dışında.')
+    }
+    return { root: match, abs, label: abs, outside: match !== workspace }
+  }
+
+  if (!workspace) {
+    throw new Error('Çalışma alanı seçilmedi. Üst araç çubuğundan bir klasör seçin.')
+  }
+  const abs = resolveInside(workspace, input)
+  await ensureRealInside(workspace, abs)
+  return { root: workspace, abs, label: input, outside: false }
+}
+
 export async function getWorkspaceRoot(): Promise<string | null> {
   const scoped = workspaceScope.getStore()
   if (scoped !== undefined) return scoped
@@ -421,9 +517,9 @@ export async function readWorkspaceFile(
   offset?: number,
   limit?: number
 ): Promise<WorkspaceFileContent> {
-  const root = await requireRoot()
-  const abs = resolveInside(root, rawPath)
-  await ensureRealInside(root, abs)
+  const target = await resolveReadTarget(rawPath)
+  const root = target.root
+  const abs = target.abs
   const stat = await fs.stat(abs)
   if (!stat.isFile()) throw new Error('Yol bir dosya değil.')
   const actualSize = stat.size
@@ -445,7 +541,7 @@ export async function readWorkspaceFile(
   }
 
   return {
-    path: toRel(root, abs),
+    path: target.label,
     content,
     size: actualSize,
     truncated,
@@ -465,9 +561,8 @@ const IMAGE_MIME: Record<string, string> = {
 export async function readWorkspaceImage(
   rawPath: string
 ): Promise<{ path: string; size: number; mime: string; dataUrl: string }> {
-  const root = await requireRoot()
-  const abs = resolveInside(root, rawPath)
-  await ensureRealInside(root, abs)
+  const target = await resolveReadTarget(rawPath)
+  const abs = target.abs
   const stat = await fs.stat(abs)
   if (!stat.isFile()) throw new Error('Yol bir dosya değil.')
   if (stat.size > MAX_IMAGE_BYTES) throw new Error('Görsel çok büyük (10 MB sınırı).')
@@ -475,7 +570,7 @@ export async function readWorkspaceImage(
   if (!mime) throw new Error('Desteklenmeyen görsel türü (PNG/JPEG/GIF/WebP).')
   const buffer = await fs.readFile(abs)
   return {
-    path: toRel(root, abs),
+    path: target.label,
     size: stat.size,
     mime,
     dataUrl: `data:${mime};base64,${buffer.toString('base64')}`
@@ -485,15 +580,14 @@ export async function readWorkspaceImage(
 export async function readWorkspacePdf(
   rawPath: string
 ): Promise<{ path: string; size: number; text: string }> {
-  const root = await requireRoot()
-  const abs = resolveInside(root, rawPath)
-  await ensureRealInside(root, abs)
+  const target = await resolveReadTarget(rawPath)
+  const abs = target.abs
   const stat = await fs.stat(abs)
   if (!stat.isFile()) throw new Error('Yol bir dosya değil.')
   if (extname(abs).toLowerCase() !== '.pdf') throw new Error('Dosya PDF değil.')
   const buffer = await fs.readFile(abs)
   return {
-    path: toRel(root, abs),
+    path: target.label,
     size: stat.size,
     text: await extractPdfText(buffer)
   }
@@ -1057,16 +1151,17 @@ async function walkFiles(root: string, dir = root, depth = 0): Promise<string[]>
 }
 
 export async function globWorkspace(pattern: string, rawPath?: string): Promise<string[]> {
-  const root = await requireRoot()
-  const base = rawPath ? resolveInside(root, rawPath) : root
-  const baseRel = toRel(root, base)
+  const target = await resolveReadTarget(rawPath)
+  const root = target.root
+  const base = target.abs
   const matcher = globToRegExp(pattern)
-  const files = await walkFiles(root, base)
+  // Yürüyüşü tabandan yapıp sonuçları tabana göre üretiriz; ek okuma
+  // kökünde sonuç mutlak yol olarak döner (aksi hâlde ana ajan yolu
+  // çözemez).
+  const files = await walkFiles(base, base)
   return files
-    .filter((file) => {
-      const rel = baseRel === '.' ? file : file.slice(baseRel.length + 1)
-      return matcher.test(rel) || matcher.test(basename(file))
-    })
+    .filter((rel) => matcher.test(rel) || matcher.test(basename(rel)))
+    .map((rel) => (target.outside ? join(base, rel) : toRel(root, join(base, rel))))
     .slice(0, MAX_GLOB_RESULTS)
 }
 
@@ -1076,8 +1171,9 @@ export async function grepWorkspace(
   include?: string,
   ignoreCase = false
 ): Promise<string[]> {
-  const root = await requireRoot()
-  const base = rawPath ? resolveInside(root, rawPath) : root
+  const target = await resolveReadTarget(rawPath)
+  const root = target.root
+  const base = target.abs
   const matcher = include ? globToRegExp(include) : null
   let regex: RegExp
   try {
@@ -1085,11 +1181,11 @@ export async function grepWorkspace(
   } catch (error) {
     throw new Error(`Geçersiz düzenli ifade: ${error instanceof Error ? error.message : error}`)
   }
-  const files = await walkFiles(root, base)
+  const files = await walkFiles(base, base)
   const results: string[] = []
   for (const rel of files) {
     if (matcher && !matcher.test(basename(rel)) && !matcher.test(rel)) continue
-    const abs = resolve(root, rel)
+    const abs = resolve(base, rel)
     try {
       const stat = await fs.stat(abs)
       if (!stat.isFile() || stat.size > 1024 * 1024) continue
@@ -1098,7 +1194,8 @@ export async function grepWorkspace(
       const lines = buffer.toString('utf8').replace(/\r\n/g, '\n').split('\n')
       for (let index = 0; index < lines.length; index += 1) {
         if (regex.test(lines[index])) {
-          results.push(`${rel}:${index + 1}: ${lines[index].slice(0, 300)}`)
+          const label = target.outside ? abs : toRel(root, abs)
+          results.push(`${label}:${index + 1}: ${lines[index].slice(0, 300)}`)
           if (results.length >= MAX_GREP_RESULTS) return results
         }
       }

@@ -188,6 +188,23 @@ npm run build:win  # Windows NSIS kurulum paketi
   - [x] şimdi çalıştır / duraklat / sil + son sonuç
   - [ ] araç kullanımı / arka planda kapalıyken çalışma
 - [x] M6 Windows paketleme (beta)
+# 0.4.25 Beta — eşzamanlılık kapısı + dış okuma kökleri
+
+0.4.24 canlı koşusu 10 dk 42 sn sonra **tamamen düştü**: sağlayıcı "en fazla 2
+eşzamanlı istek" diyordu, biz ana ajan + 2 alt ajan = 3 gönderdik. Üç kusur
+kapatıldı:
+
+| Katman | Ne yapar |
+|---|---|
+| Model istek kapısı | Süreç genelinde tek sayaç (varsayılan **2**); ana ajan önceliği |
+| Dış okuma kökleri | Kullanıcının mesajında yazdığı yollar **salt-okunur** açılır (yazma kapalı) |
+| Doygunluk | Turu düşürmek yerine kısmi işi korur, nedeni ve çözümü söyler |
+| İstem | Salt-okunur ajana "run_command kullan" demeyi bıraktı (o araç onda yok) |
+
+**86 paket · 2050 kontrol** (yeni: model-gate 18, model-concurrency-e2e 4,
+model-concurrency-live 5, read-roots 13, read-roots-e2e 12). Ayrıntı: `docs/RELEASE-0.4.25.md`,
+`docs/MODEL-CONCURRENCY.md`.
+
 # 0.4.24 Beta — doğrulama kapısı + taze bağlamlı inceleme
 
 Alt ajan mimarisinde **ölçümün kendisi** güçlendirildi. Yeni yetenek değil;
